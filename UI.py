@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 from pyecharts import options as opts
@@ -5,7 +6,6 @@ from pyecharts.charts import Line, Pie, WordCloud, Bar
 import streamlit.components.v1 as components
 import jieba
 from collections import Counter
-import datetime
 
 # --- Helper Function for Pyecharts ---
 def st_pyecharts(chart, height="400px", width="100%"):
@@ -32,7 +32,10 @@ def st_pyecharts(chart, height="400px", width="100%"):
                 padding: 0;
                 width: 100%;
                 height: 100%;
-                overflow: hidden; 
+                overflow: auto; 
+            }}
+            body > div {{
+                width: 100% !important;
             }}
         </style>
     </head>
@@ -45,7 +48,8 @@ def st_pyecharts(chart, height="400px", width="100%"):
     # 3. Display using Streamlit's html component
     #    Adjust height to match the chart's height
     h = int(height.replace("px", "")) if isinstance(height, str) else height
-    components.html(full_html, height=h, width=None, scrolling=False)
+    w = width if isinstance(width, int) else None
+    components.html(full_html, height=h, width=w, scrolling=False)
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -93,11 +97,11 @@ def load_data(file_path):
         st.error(f"Error loading data: {e}")
         return pd.DataFrame()
 
-DATA_PATH = "weibo_comments_sentiment.csv"
+DATA_PATH = "BERT_prediction.csv"
 df = load_data(DATA_PATH)
 
 if df.empty:
-    st.warning("暂无数据，请检查 weibo_comments_sentiment.csv 文件是否存在且格式正确。")
+    st.warning("暂无数据，请检查 BERT_prediction.csv 文件是否存在且格式正确。")
     st.stop()
 
 # --- Sidebar Filters ---
@@ -175,7 +179,7 @@ with col4:
 st.markdown("---")
 
 # --- Layout: Row 1 (Trend & Distribution) ---
-row1_col1, row1_col2 = st.columns([2, 1])
+row1_col1, row1_col2 = st.columns([3, 2])
 
 with row1_col1:
     st.subheader("📈 情感趋势变化 (每小时)")
@@ -186,7 +190,7 @@ with row1_col1:
         
         # Line Chart for Sentiment Score
         line = (
-            Line()
+            Line(init_opts=opts.InitOpts(width="100%", height="400px"))
             .add_xaxis(trend_data['publish_time'].dt.strftime('%Y-%m-%d %H:%M').tolist())
             .add_yaxis("平均情感分", trend_data['sentiment_score'].round(3).tolist(), 
                        is_smooth=True, 
@@ -215,10 +219,10 @@ with row1_col2:
         data_pair = [list(z) for z in zip(sentiment_counts.index.tolist(), sentiment_counts.values.tolist())]
         
         pie = (
-            Pie()
-            .add("", data_pair, radius=["40%", "70%"])
+            Pie(init_opts=opts.InitOpts(width="100%", height="400px"))
+            .add("", data_pair, radius=["35%", "65%"], center=["50%", "45%"])
             .set_global_opts(
-                legend_opts=opts.LegendOpts(orient="vertical", pos_top="15%", pos_left="2%"),
+                legend_opts=opts.LegendOpts(orient="horizontal", pos_bottom="0%", pos_left="center"),
             )
             .set_series_opts(label_opts=opts.LabelOpts(formatter="{b}: {c} ({d}%)"))
         )
@@ -245,7 +249,7 @@ with row2_col1:
         data_pair = word_counts.most_common(100)
         
         wordcloud = (
-            WordCloud()
+            WordCloud(init_opts=opts.InitOpts(width="100%", height="400px"))
             .add("", data_pair, word_size_range=[20, 100])
             .set_global_opts(title_opts=opts.TitleOpts(title="高频词汇"))
         )
@@ -259,7 +263,7 @@ with row2_col2:
         user_counts = filtered_df['user_name'].value_counts().head(10).sort_values(ascending=True)
         
         bar = (
-            Bar()
+            Bar(init_opts=opts.InitOpts(width="100%", height="400px"))
             .add_xaxis(user_counts.index.tolist())
             .add_yaxis("评论数", user_counts.values.tolist())
             .reversal_axis()
@@ -281,3 +285,145 @@ st.dataframe(
     use_container_width=True,
     height=300
 )
+
+st.markdown("---")
+st.subheader("📑 模型评估报告")
+
+def normalize_eval_label(value):
+    if pd.isna(value):
+        return "未知"
+    s = str(value).strip()
+    if s in {"积极", "正面", "正向"}:
+        return "积极"
+    if s in {"消极", "负面", "负向"}:
+        return "消极"
+    if "positive" in s.lower():
+        return "积极"
+    if "negative" in s.lower():
+        return "消极"
+    return "未知"
+
+
+def compute_eval_metrics(truth, pred):
+    truth = truth.map(normalize_eval_label)
+    pred = pred.map(normalize_eval_label)
+    valid = truth.isin({"积极", "消极"})
+    truth = truth[valid]
+    pred = pred[valid]
+
+    tp = int(((truth == "积极") & (pred == "积极")).sum())
+    tn = int(((truth == "消极") & (pred == "消极")).sum())
+    fp = int(((truth == "消极") & (pred == "积极")).sum())
+    fn = int(((truth == "积极") & (pred == "消极")).sum())
+    total = int(len(truth))
+
+    accuracy = (tp + tn) / total if total else 0.0
+
+    precision_pos = tp / (tp + fp) if (tp + fp) else 0.0
+    recall_pos = tp / (tp + fn) if (tp + fn) else 0.0
+    f1_pos = (
+        2 * precision_pos * recall_pos / (precision_pos + recall_pos)
+        if (precision_pos + recall_pos)
+        else 0.0
+    )
+
+    precision_neg = tn / (tn + fn) if (tn + fn) else 0.0
+    recall_neg = tn / (tn + fp) if (tn + fp) else 0.0
+    f1_neg = (
+        2 * precision_neg * recall_neg / (precision_neg + recall_neg)
+        if (precision_neg + recall_neg)
+        else 0.0
+    )
+
+    macro_f1 = (f1_pos + f1_neg) / 2
+
+    return {
+        "accuracy": accuracy,
+        "macro_f1": macro_f1,
+        "f1_pos": f1_pos,
+        "f1_neg": f1_neg,
+        "tp": tp,
+        "tn": tn,
+        "fp": fp,
+        "fn": fn,
+        "total": total,
+    }
+
+
+sample_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample_target.csv")
+bert_pred_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "BERT_prediction.csv")
+baseline_pred_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Baseline_prediction.csv")
+
+if os.path.exists(sample_path) and os.path.exists(bert_pred_path) and os.path.exists(baseline_pred_path):
+    try:
+        sample_df = pd.read_csv(sample_path, encoding="utf-8-sig")
+    except Exception:
+        sample_df = pd.read_csv(sample_path)
+
+    try:
+        bert_pred_df = pd.read_csv(bert_pred_path, encoding="utf-8-sig")
+    except Exception:
+        bert_pred_df = pd.read_csv(bert_pred_path)
+
+    try:
+        baseline_pred_df = pd.read_csv(baseline_pred_path, encoding="utf-8-sig")
+    except Exception:
+        baseline_pred_df = pd.read_csv(baseline_pred_path)
+
+    key_cols = ["weibo_id", "user_name", "publish_time", "cleaned_text"]
+    keys = [c for c in key_cols if c in sample_df.columns and c in bert_pred_df.columns and c in baseline_pred_df.columns]
+
+    if keys and "sentiment_label" in sample_df.columns and "sentiment_label" in bert_pred_df.columns and "sentiment_label" in baseline_pred_df.columns:
+        eval_df = sample_df[keys + ["sentiment_label"]].merge(
+            bert_pred_df[keys + ["sentiment_label"]].rename(columns={"sentiment_label": "BERT_label"}),
+            on=keys,
+            how="left",
+        ).merge(
+            baseline_pred_df[keys + ["sentiment_label"]].rename(columns={"sentiment_label": "SnowNLP_label"}),
+            on=keys,
+            how="left",
+        )
+
+        bert_m = compute_eval_metrics(eval_df["sentiment_label"], eval_df["BERT_label"])
+        snow_m = compute_eval_metrics(eval_df["sentiment_label"], eval_df["SnowNLP_label"])
+
+        metric_df = pd.DataFrame(
+            [
+                {"模型": "BERT", "准确率": bert_m["accuracy"], "Macro-F1": bert_m["macro_f1"], "积极F1": bert_m["f1_pos"], "消极F1": bert_m["f1_neg"]},
+                {"模型": "SnowNLP", "准确率": snow_m["accuracy"], "Macro-F1": snow_m["macro_f1"], "积极F1": snow_m["f1_pos"], "消极F1": snow_m["f1_neg"]},
+            ]
+        ).set_index("模型")
+
+        st.subheader("📊 评估指标对比")
+        st.bar_chart(metric_df[["准确率", "Macro-F1"]])
+        st.bar_chart(metric_df[["积极F1", "消极F1"]])
+
+        st.subheader("🧾 混淆矩阵")
+        truth = eval_df["sentiment_label"].map(normalize_eval_label)
+        bert_pred = eval_df["BERT_label"].map(normalize_eval_label)
+        snow_pred = eval_df["SnowNLP_label"].map(normalize_eval_label)
+
+        cm_bert = pd.crosstab(truth, bert_pred, rownames=["真值"], colnames=["BERT 预测"], dropna=False)
+        cm_snow = pd.crosstab(truth, snow_pred, rownames=["真值"], colnames=["SnowNLP 预测"], dropna=False)
+        cm_col1, cm_col2 = st.columns(2)
+        with cm_col1:
+            st.write("BERT")
+            st.dataframe(cm_bert, use_container_width=True)
+        with cm_col2:
+            st.write("SnowNLP")
+            st.dataframe(cm_snow, use_container_width=True)
+    else:
+        st.info("评估数据列不完整，无法绘制评估图表")
+else:
+    st.info("未找到 sample_target.csv / BERT_prediction.csv / Baseline_prediction.csv，无法绘制评估图表")
+
+report_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "estimate_report.html")
+if os.path.exists(report_path):
+    try:
+        with open(report_path, "r", encoding="utf-8") as f:
+            report_html = f.read()
+        components.html(report_html, height=900, scrolling=True)
+    except Exception as e:
+        st.error(f"读取评估报告失败: {e}")
+else:
+    st.info("未找到 estimate_report.html，请先运行：/usr/bin/python3 Estimate.py")
