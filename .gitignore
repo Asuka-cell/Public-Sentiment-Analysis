@@ -15,6 +15,18 @@ ENV/
 .streamlit/
 Thumbs.db
 .DS_Store
+
+# Data & generated outputs
+/dataset/
+/model_estimate/*.csv
+/model_estimate/*.html
+/get_weibo_data/*.txt
+/get_weibo_data/*.json
+/get_weibo_data/*.csv
+/model_prediction/*_prediction.csv
+
+# Large topic-model artifacts
 model_prediction/bertopic_output/
+
 debug_weibo/
 其它/
