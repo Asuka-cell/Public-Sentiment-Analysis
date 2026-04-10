@@ -15,6 +15,6 @@ ENV/
 .streamlit/
 Thumbs.db
 .DS_Store
-bertopic_output/
+model_prediction/bertopic_output/
 debug_weibo/
 其它/
