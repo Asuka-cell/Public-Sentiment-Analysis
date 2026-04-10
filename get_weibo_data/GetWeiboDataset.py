@@ -4,10 +4,7 @@ import requests
 import random
 import csv
 import os
-from bs4 import BeautifulSoup
 import re
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 # --- 全局配置 ---
 
@@ -61,6 +58,15 @@ proxy_valid_cache = {}
 proxy_fail_counts = {}
 proxy_success_counts = {}
 
+LATEST_ID_FILE = "latest_weibo_id.json"
+WEIBO_TEXTS_CSV = "weibo_posts.csv"
+WEIBO_COMMENTS_CSV = "weibo_comments.csv"
+DEBUG_DUMP_DIR = "debug_weibo"
+DEBUG_DUMP_LIMIT = 5
+debug_dump_count = 0
+PROXY_SOURCE_FILE = "proxies.txt"
+proxy_source_mtime = 0.0
+
 def human_sleep(base_range, long_prob=0.08, long_range=(8, 15)):
     t = random.uniform(*base_range)
     time.sleep(t)
@@ -101,6 +107,24 @@ def get_random_headers(referer_url, cookies=None):
     return headers
 
 def get_proxy_dict():
+    global proxy_source_mtime
+    try:
+        if os.path.exists(PROXY_SOURCE_FILE):
+            mtime = os.path.getmtime(PROXY_SOURCE_FILE)
+            if mtime != proxy_source_mtime:
+                proxy_source_mtime = mtime
+                try:
+                    with open(PROXY_SOURCE_FILE, "r", encoding="utf-8") as f:
+                        loaded = [line.strip() for line in f if line.strip()]
+                    loaded = [p for p in loaded if p and not p.startswith("#")]
+                    if loaded:
+                        PROXY_LIST[:] = loaded
+                        print(f"[代理] 已加载 {len(PROXY_LIST)} 个代理 (来自 {PROXY_SOURCE_FILE})")
+                except Exception as e:
+                    print(f"[代理] 读取 {PROXY_SOURCE_FILE} 失败: {e}")
+    except Exception:
+        pass
+
     if not PROXY_LIST:
         return None, "Localhost"
     now = time.time()
@@ -226,28 +250,227 @@ def load_progress():
                 return 0
     return 0
 
+def parse_weibo_id(value):
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+def infer_latest_id_from_csv(csv_path):
+    if not os.path.exists(csv_path):
+        return 0
+    latest = 0
+    try:
+        with open(csv_path, "r", encoding="utf-8-sig") as f:
+            reader = csv.reader(f)
+            next(reader, None)
+            for row in reader:
+                if not row:
+                    continue
+                wid = parse_weibo_id(row[0])
+                if wid is not None and wid > latest:
+                    latest = wid
+    except Exception:
+        return 0
+    return latest
+
+def load_latest_ids():
+    defaults = {
+        "latest_comment_id": 0,
+        "latest_post_id": 0,
+    }
+    if os.path.exists(LATEST_ID_FILE):
+        try:
+            with open(LATEST_ID_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for k in list(defaults.keys()):
+                v = data.get(k, defaults[k])
+                defaults[k] = int(v) if str(v).isdigit() else int(v)
+        except Exception:
+            pass
+
+    if defaults["latest_comment_id"] <= 0:
+        defaults["latest_comment_id"] = infer_latest_id_from_csv(WEIBO_COMMENTS_CSV)
+    if defaults["latest_post_id"] <= 0:
+        defaults["latest_post_id"] = infer_latest_id_from_csv(WEIBO_TEXTS_CSV)
+    return defaults
+
+def save_latest_ids(latest_ids):
+    data = {
+        "latest_comment_id": int(latest_ids.get("latest_comment_id", 0) or 0),
+        "latest_post_id": int(latest_ids.get("latest_post_id", 0) or 0),
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    try:
+        with open(LATEST_ID_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[警告] 写入 {LATEST_ID_FILE} 失败: {e}")
+
+def ensure_csv_header(file_path, header):
+    if not os.path.exists(file_path):
+        return
+    try:
+        if os.path.getsize(file_path) == 0:
+            with open(file_path, "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(header)
+            return
+    except Exception:
+        return
+
+    try:
+        with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
+            first_line = f.readline()
+        if first_line.strip().startswith(header[0]):
+            return
+    except Exception:
+        return
+
+    try:
+        with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
+            content = f.read()
+        with open(file_path, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(header)
+            f.write(content)
+    except Exception as e:
+        print(f"[警告] 修复表头失败 {file_path}: {e}")
+
+def extract_status_fields(status):
+    if not isinstance(status, dict):
+        return None, None, None
+    created_at = status.get("created_at")
+    user = (status.get("user") or {}).get("screen_name")
+    text = status.get("text_raw") or status.get("text") or status.get("raw_text")
+    return created_at, user, text
+
+
+def dump_debug_json(prefix, weibo_id, payload):
+    global debug_dump_count
+    if debug_dump_count >= DEBUG_DUMP_LIMIT:
+        return
+    debug_dump_count += 1
+    try:
+        os.makedirs(DEBUG_DUMP_DIR, exist_ok=True)
+        path = os.path.join(DEBUG_DUMP_DIR, f"{prefix}_{weibo_id}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        print(f"   [调试] 已保存返回内容到 {path}")
+    except Exception as e:
+        print(f"   [调试] 保存调试文件失败: {e}")
+
+
+def fetch_long_text_pc(weibo_id, cookies):
+    url = f"https://weibo.com/ajax/statuses/longtext?id={weibo_id}"
+    headers = get_random_headers(f"https://weibo.com/detail/{weibo_id}", cookies)
+    resp = request_with_retry(url, cookies, headers)
+    if not resp or resp.status_code != 200:
+        return None
+    try:
+        data = resp.json()
+    except Exception:
+        return None
+    if data.get("ok") != 1:
+        return None
+    content = (data.get("data") or {}).get("longTextContent")
+    if not content:
+        content = (data.get("data") or {}).get("content")
+    return content
+
+
+def fetch_long_text_m(weibo_id, cookies):
+    url = f"https://m.weibo.cn/statuses/extend?id={weibo_id}"
+    headers = get_random_headers(f"https://m.weibo.cn/detail/{weibo_id}", cookies)
+    resp = request_with_retry(url, cookies, headers)
+    if not resp or resp.status_code != 200:
+        return None
+    try:
+        data = resp.json()
+    except Exception:
+        return None
+    if data.get("ok") != 1:
+        return None
+    content = (data.get("data") or {}).get("longTextContent")
+    if not content:
+        content = (data.get("data") or {}).get("content")
+    return content
+
+
+def maybe_expand_long_text(status, weibo_id, cookies, current_text):
+    if not isinstance(status, dict):
+        return current_text
+
+    is_long = bool(status.get("isLongText") or status.get("is_long_text"))
+    text_length = status.get("textLength") or status.get("text_length")
+    try:
+        text_length = int(text_length) if text_length is not None else None
+    except Exception:
+        text_length = None
+
+    cleaned_current = clean_html(current_text) if current_text else ""
+    looks_truncated = False
+    if cleaned_current.endswith("..."):
+        looks_truncated = True
+    if text_length and len(cleaned_current) > 0 and len(cleaned_current) < text_length:
+        looks_truncated = True
+
+    if not (is_long or looks_truncated):
+        return current_text
+
+    long_html = fetch_long_text_pc(weibo_id, cookies) or fetch_long_text_m(weibo_id, cookies)
+    if not long_html:
+        return current_text
+
+    long_text = clean_html(long_html)
+    if not long_text:
+        return current_text
+
+    return long_text
+
 def fetch_weibo_detail(weibo_id, cookies):
     pc_url = f"https://weibo.com/ajax/statuses/show?id={weibo_id}"
     headers = get_random_headers('https://weibo.com/', cookies)
+    resp = request_with_retry(pc_url, cookies, headers)
     resp = request_with_retry(pc_url, cookies, headers)
     
     if resp and resp.status_code == 200:
         try:
             data = resp.json()
             if data.get('ok') == 1:
-                status = data.get('data', {})
-                created_at = status.get('created_at')
-                text = status.get('text') or status.get('text_raw')
-                user = (status.get('user') or {}).get('screen_name')
-                expected_comment_counts[weibo_id] = status.get('comments_count', 0) or status.get('comments_count', 0)
+                status = data.get('data')
+                if not isinstance(status, dict):
+                    status = data
+                created_at, user, text = extract_status_fields(status)
+                text = maybe_expand_long_text(status, weibo_id, cookies, text)
+                expected_comment_counts[weibo_id] = status.get('comments_count', 0) or 0
                 
                 # 清洗文本
                 clean_text = clean_html(text)
+
+                if not clean_text or not created_at or not user:
+                    print("   [博文] PC接口字段不完整，尝试移动端")
+                    print(
+                        f"   [博文] PC字段: created_at={bool(created_at)}, user={bool(user)}, text_len={len(clean_text) if clean_text else 0}"
+                    )
+                    dump_debug_json(
+                        "pc_incomplete",
+                        weibo_id,
+                        {
+                            "url": pc_url,
+                            "ok": data.get("ok"),
+                            "keys": list(data.keys()) if isinstance(data, dict) else None,
+                            "data_type": str(type(status)),
+                            "status_keys": list(status.keys()) if isinstance(status, dict) else None,
+                            "sample": status if isinstance(status, dict) else status,
+                        },
+                    )
+                else:
+                    # 写入博文CSV
+                    write_weibo_csv(weibo_id, user, created_at, clean_text)
+                    print(f"   [博文] 获取成功: {clean_text[:20]}...")
+                    return True
                 
-                # 写入博文CSV
-                write_weibo_csv(weibo_id, user, created_at, clean_text)
-                print(f"   [博文] 获取成功: {clean_text[:20]}...")
-                return True
             else:
                 print(f"   [博文] PC接口返回非OK，尝试移动端")
         except Exception as e:
@@ -260,15 +483,34 @@ def fetch_weibo_detail(weibo_id, cookies):
         try:
             data = resp.json()
             if data.get('ok') == 1:
-                status = data.get('data', {})
-                created_at = status.get('created_at')
-                text = status.get('text')
-                user = (status.get('user') or {}).get('screen_name')
+                status = data.get('data')
+                if not isinstance(status, dict):
+                    status = data
+                created_at, user, text = extract_status_fields(status)
+                text = maybe_expand_long_text(status, weibo_id, cookies, text)
                 expected_comment_counts[weibo_id] = status.get('comments_count', 0) or 0
                 clean_text = clean_html(text)
-                write_weibo_csv(weibo_id, user, created_at, clean_text)
-                print(f"   [博文] 移动端获取成功: {clean_text[:20]}...")
-                return True
+                if not clean_text or not created_at or not user:
+                    print("   [博文] 移动端字段不完整，跳过写入")
+                    print(
+                        f"   [博文] M字段: created_at={bool(created_at)}, user={bool(user)}, text_len={len(clean_text) if clean_text else 0}"
+                    )
+                    dump_debug_json(
+                        "m_incomplete",
+                        weibo_id,
+                        {
+                            "url": m_url,
+                            "ok": data.get("ok"),
+                            "keys": list(data.keys()) if isinstance(data, dict) else None,
+                            "data_type": str(type(status)),
+                            "status_keys": list(status.keys()) if isinstance(status, dict) else None,
+                            "sample": status if isinstance(status, dict) else status,
+                        },
+                    )
+                else:
+                    write_weibo_csv(weibo_id, user, created_at, clean_text)
+                    print(f"   [博文] 移动端获取成功: {clean_text[:20]}...")
+                    return True
         except Exception as e:
             print(f"   [博文] 移动端解析出错: {e}")
     return False
@@ -415,11 +657,14 @@ def fetch_comments(weibo_id, cookies):
 
 def write_weibo_csv(weibo_id, user, created_at, text):
     with csv_lock:
-        file_exists = os.path.isfile('weibo_posts.csv')
-        with open('weibo_posts.csv', 'a', encoding='utf-8-sig', newline='') as f:
+        header = ['weibo_id', 'user_name', 'publish_time', 'text']
+        if os.path.exists(WEIBO_TEXTS_CSV):
+            ensure_csv_header(WEIBO_TEXTS_CSV, header)
+        file_exists = os.path.isfile(WEIBO_TEXTS_CSV)
+        with open(WEIBO_TEXTS_CSV, 'a', encoding='utf-8-sig', newline='') as f:
             writer = csv.writer(f)
             if not file_exists:
-                writer.writerow(['weibo_id', 'user_name', 'publish_time', 'text'])
+                writer.writerow(header)
             writer.writerow([weibo_id, user, created_at, text])
 
 def write_comments_csv(comments_list):
@@ -429,40 +674,46 @@ def write_comments_csv(comments_list):
     if not comments_list:
         return
     with csv_lock:
-        file_exists = os.path.isfile('weibo_comments.csv')
-        with open('weibo_comments.csv', 'a', encoding='utf-8-sig', newline='') as f:
+        file_exists = os.path.isfile(WEIBO_COMMENTS_CSV)
+        with open(WEIBO_COMMENTS_CSV, 'a', encoding='utf-8-sig', newline='') as f:
             writer = csv.writer(f)
             if not file_exists:
                 writer.writerow(['weibo_id', 'user_name', 'publish_time', 'text'])
             writer.writerows(comments_list)
 
-def process_weibo_task(weibo_id, cookies):
+def process_weibo_task(weibo_id, cookies, latest_ids, fetch_posts=True, fetch_comments_flag=True):
     """
     单个微博ID的处理任务
     """
     print(f"\n[线程] 开始处理微博 ID: {weibo_id}")
     human_sleep((1.0, 3.0), long_prob=0.1, long_range=(6, 12))
-    if random.random() < 0.4:
-        fetch_comments(weibo_id, cookies)
+    if fetch_posts:
+        ok = fetch_weibo_detail(weibo_id, cookies)
+        if ok:
+            wid_int = parse_weibo_id(weibo_id)
+            if wid_int is not None and wid_int > int(latest_ids.get("latest_post_id", 0) or 0):
+                latest_ids["latest_post_id"] = wid_int
+                save_latest_ids(latest_ids)
         human_sleep((1.2, 2.8), long_prob=0.08, long_range=(5, 10))
-        fetch_weibo_detail(weibo_id, cookies)
-    else:
-        fetch_weibo_detail(weibo_id, cookies)
-        human_sleep((1.2, 2.8), long_prob=0.08, long_range=(5, 10))
+
+    if fetch_comments_flag:
         fetch_comments(weibo_id, cookies)
+        wid_int = parse_weibo_id(weibo_id)
+        if wid_int is not None and wid_int > int(latest_ids.get("latest_comment_id", 0) or 0):
+            latest_ids["latest_comment_id"] = wid_int
+            save_latest_ids(latest_ids)
+
     human_sleep(TASK_DELAY_RANGE, long_prob=0.15, long_range=(10, 25))
 
-def get_processed_ids():
-    """获取已经爬取过的微博ID"""
-    processed = set()
-    if os.path.exists('weibo_posts.csv'):
-        with open('weibo_posts.csv', 'r', encoding='utf-8-sig') as f:
-            reader = csv.reader(f)
-            next(reader, None) # 跳过表头
-            for row in reader:
-                if row:
-                    processed.add(row[0]) # weibo_id是第一列
-    return processed
+def should_fetch_by_latest_id(weibo_id, latest_id_value):
+    wid = parse_weibo_id(weibo_id)
+    if wid is None:
+        return False
+    try:
+        latest = int(latest_id_value or 0)
+    except Exception:
+        latest = 0
+    return wid > latest
 
 def main():
     # 1. 加载 Cookie
@@ -479,19 +730,55 @@ def main():
         print("weibo_ids.txt not found. Please run GetWeiboIdList copy.py first.")
         return
 
-    # 3. 过滤已爬取的ID (替代原来的 progress.txt 逻辑)
-    processed_ids = get_processed_ids()
-    weibo_ids_to_process = [wid for wid in all_weibo_ids if wid not in processed_ids]
-    
-    print(f"总共有 {len(all_weibo_ids)} 个微博ID，已处理 {len(processed_ids)} 个，剩余 {len(weibo_ids_to_process)} 个待处理...")
+    latest_ids = load_latest_ids()
 
-    if not weibo_ids_to_process:
-        print("所有微博ID均已处理完毕。")
+    parsed_ids = [(parse_weibo_id(w), w) for w in all_weibo_ids]
+    parsed_ids = [(i, w) for i, w in parsed_ids if i is not None]
+    parsed_ids.sort(key=lambda x: x[0])
+
+    max_weibo_id = parsed_ids[-1][0] if parsed_ids else 0
+    print(
+        f"总共有 {len(all_weibo_ids)} 个微博ID，最大ID: {max_weibo_id}；"
+        f"最新评论ID: {latest_ids.get('latest_comment_id', 0)}；最新帖子ID: {latest_ids.get('latest_post_id', 0)}"
+    )
+
+    post_ids_to_process = [
+        w for _, w in parsed_ids if should_fetch_by_latest_id(w, latest_ids.get("latest_post_id", 0))
+    ]
+    comment_ids_to_process = [
+        w for _, w in parsed_ids if should_fetch_by_latest_id(w, latest_ids.get("latest_comment_id", 0))
+    ]
+
+    fetch_posts_flag = True
+    fetch_comments_flag = bool(comment_ids_to_process)
+
+    print(
+        f"待爬取帖子ID数量: {len(post_ids_to_process)} (输出: {WEIBO_TEXTS_CSV})；"
+        f"待爬取评论ID数量: {len(comment_ids_to_process)} (输出: {WEIBO_COMMENTS_CSV})"
+    )
+
+    if not post_ids_to_process and not comment_ids_to_process:
+        print("没有需要爬取的新内容。")
         return
 
-    for wid in weibo_ids_to_process:
+    ids_union = []
+    if fetch_posts_flag:
+        ids_union.extend(post_ids_to_process)
+    if fetch_comments_flag:
+        ids_union.extend(comment_ids_to_process)
+    ids_union = sorted(set(ids_union), key=lambda x: parse_weibo_id(x) or 0)
+
+    for wid in ids_union:
         try:
-            process_weibo_task(wid, cookies)
+            do_posts = wid in set(post_ids_to_process)
+            do_comments = wid in set(comment_ids_to_process)
+            process_weibo_task(
+                wid,
+                cookies,
+                latest_ids,
+                fetch_posts=do_posts,
+                fetch_comments_flag=do_comments,
+            )
         except Exception as e:
             print(f"[错误] 处理微博 {wid} 时发生异常: {e}")
 

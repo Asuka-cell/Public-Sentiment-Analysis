@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>情感分析对比评估报告</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; margin: 20px; color: #111827; }
+    .muted { color: #6b7280; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px; background: #ffffff; }
+    .title { font-size: 20px; font-weight: 700; margin: 0 0 8px 0; }
+    .h2 { font-size: 16px; font-weight: 700; margin: 14px 0 8px 0; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border-bottom: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; vertical-align: top; font-size: 13px; }
+    th { background: #f9fafb; position: sticky; top: 0; }
+    .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    input[type="text"] { padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; min-width: 260px; }
+    select { padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; }
+    label { font-size: 13px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; border: 1px solid #e5e7eb; }
+    .pos { background: #ecfdf5; border-color: #a7f3d0; }
+    .neg { background: #eff6ff; border-color: #bfdbfe; }
+    .unk { background: #fff7ed; border-color: #fed7aa; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="title">情感分析对比评估报告</div>
+    <div class="muted">生成时间：<span id="ts"></span> · 样本数：<span id="n"></span></div>
+  </div>
+
+  <div class="grid" style="margin-top: 14px;">
+    <div class="card">
+      <div class="h2">roBERTa</div>
+      <table id="tbl_roberta"></table>
+    </div>
+    <div class="card">
+      <div class="h2">SnowNLP</div>
+      <table id="tbl_snownlp"></table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top: 14px;">
+    <div class="h2">错误样本查看（可搜索/过滤）</div>
+    <div class="controls">
+      <input id="q" type="text" placeholder="搜索：文本/用户/ID/标签..." />
+      <select id="model">
+        <option value="all">显示全部</option>
+        <option value="roberta">仅看 roBERTa 错误</option>
+        <option value="snownlp">仅看 SnowNLP 错误</option>
+      </select>
+      <label><input id="only_err" type="checkbox" checked /> 只显示预测错误（真值为积极/消极）</label>
+      <span class="muted">共 <span id="err_count"></span> 行</span>
+    </div>
+    <div style="margin-top: 10px; overflow: auto; max-height: 520px;">
+      <table>
+        <thead>
+          <tr id="thead"></tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const payload = {"timestamp": "2026-04-10 16:13:44", "total_samples": 100, "error_rows": [{"weibo_id": 5247785926658002, "user_name": "奇妙的松果", "publish_time": "Thu Dec 25 18:00:52 +0800 2025", "cleaned_text": "正好调整价格降点价", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.4037920930981635, "SnowNLP_label": "积极", "SnowNLP_score": 0.948326746795332}, {"weibo_id": 5248096733761418, "user_name": "四海亦家H", "publish_time": "Fri Dec 26 17:33:29 +0800 2025", "cleaned_text": "话题成功的营销者，生意的失败者。", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.1064647518037259, "SnowNLP_label": "积极", "SnowNLP_score": 0.9026301336093882}, {"weibo_id": 5247742303539214, "user_name": "MuMu-会游泳的鱼", "publish_time": "Thu Dec 25 17:04:29 +0800 2025", "cleaned_text": "他的目的达到了", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.4982673040304693, "SnowNLP_label": "积极", "SnowNLP_score": 0.6666666666666666}, {"weibo_id": 5247787723391514, "user_name": "江晚一夏断余愁", "publish_time": "Thu Dec 25 19:45:23 +0800 2025", "cleaned_text": "玩互联网怎么比得过这种老油条", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.1075402403078466, "SnowNLP_label": "积极", "SnowNLP_score": 0.9572702637138566}, {"weibo_id": 5247757474334944, "user_name": "李侠东", "publish_time": "Fri Dec 26 11:52:17 +0800 2025", "cleaned_text": "这段话写得有水平", "sentiment_label": "积极", "roBERTa_label": "消极", "roBERTa_score": 0.1014289839329142, "SnowNLP_label": "积极", "SnowNLP_score": 0.5959140518646625}, {"weibo_id": 5247775847486708, "user_name": "kkk泥", "publish_time": "Thu Dec 25 16:20:22 +0800 2025", "cleaned_text": "就是啊道歉不丢人", "sentiment_label": "积极", "roBERTa_label": "积极", "roBERTa_score": 0.8306946624431748, "SnowNLP_label": "消极", "SnowNLP_score": 0.0825940322111964}, {"weibo_id": 5247742303539214, "user_name": "喝茶论道谈风月", "publish_time": "Thu Dec 25 16:51:09 +0800 2025", "cleaned_text": "南墙是最好的老师", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.3061238481376681, "SnowNLP_label": "积极", "SnowNLP_score": 0.9300379144241646}, {"weibo_id": 5247727168652790, "user_name": "青年李正经", "publish_time": "Thu Dec 25 17:54:47 +0800 2025", "cleaned_text": "再一次证明了是个早已和时代和社会脱节的特别纯粹的纯傻b和纯老登。", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.1004056928338877, "SnowNLP_label": "积极", "SnowNLP_score": 0.952825654269168}, {"weibo_id": 5247787970596289, "user_name": "咻咻咻咻咻嗯", "publish_time": "Thu Dec 25 17:15:34 +0800 2025", "cleaned_text": "知道错了的话，那就及时更改呀", "sentiment_label": "消极", "roBERTa_label": "积极", "roBERTa_score": 0.6523972137744728, "SnowNLP_label": "消极", "SnowNLP_score": 0.054734069811805}, {"weibo_id": 5247757474334944, "user_name": "Mike88592", "publish_time": "Thu Dec 25 23:49:51 +0800 2025", "cleaned_text": "夜壶炒股发财了// 胡说", "sentiment_label": "消极", "roBERTa_label": "积极", "roBERTa_score": 0.6067506551742554, "SnowNLP_label": "消极", "SnowNLP_score": 0.0027573480347843}, {"weibo_id": 5247757474334944, "user_name": "PMLeadership", "publish_time": "Thu Dec 25 17:58:36 +0800 2025", "cleaned_text": "叼盘发这一条至少能从西贝拿几十万好处费吧？", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.4748856902122497, "SnowNLP_label": "积极", "SnowNLP_score": 0.716531821817412}, {"weibo_id": 5247762905432499, "user_name": "春日桃里li", "publish_time": "Thu Dec 25 15:31:36 +0800 2025", "cleaned_text": "全是预制菜", "sentiment_label": "消极", "roBERTa_label": "积极", "roBERTa_score": 0.824596687370331, "SnowNLP_label": "消极", "SnowNLP_score": 0.156260068939294}, {"weibo_id": 5247727168652790, "user_name": "廬陵外使", "publish_time": "Thu Dec 25 14:28:18 +0800 2025", "cleaned_text": "教训 出了问题 即使不吭声也是很好的策略", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.4749283075332641, "SnowNLP_label": "积极", "SnowNLP_score": 0.7922513908609208}, {"weibo_id": 5247764268325379, "user_name": "袖儿的觅糖", "publish_time": "Thu Dec 25 19:56:14 +0800 2025", "cleaned_text": "事教他做人，挫折中找经验教训", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.4191952347755432, "SnowNLP_label": "积极", "SnowNLP_score": 0.9566835705717378}, {"weibo_id": 5247768037951106, "user_name": "在你眼眸低垂前接住眉间那一场雪", "publish_time": "Thu Dec 25 16:32:47 +0800 2025", "cleaned_text": "西贝能不能别营销了", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.122290211322934, "SnowNLP_label": "积极", "SnowNLP_score": 0.7363347740612772}, {"weibo_id": 5247737916031167, "user_name": "化做一粒尘", "publish_time": "Thu Dec 25 14:14:33 +0800 2025", "cleaned_text": "今年发生的系列魔幻事件，让我更加坚定的对我们的祖先五体投地啦！什么叫：夏虫不可语冰？！什么叫对牛弹琴？！什么叫掩耳盗铃？！什么叫王顾左右而言他？！", "sentiment_label": "消极", "roBERTa_label": "积极", "roBERTa_score": 0.8934042977761948, "SnowNLP_label": "积极", "SnowNLP_score": 0.9996250019766564}, {"weibo_id": 5247776116185673, "user_name": "就次搁浅", "publish_time": "Sun Dec 28 10:31:58 +0800 2025", "cleaned_text": "嘴硬要有资本，不光是资金和本钱嘛…", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.2655756594570233, "SnowNLP_label": "积极", "SnowNLP_score": 0.9879393146147086}, {"weibo_id": 5247768037951106, "user_name": "日落也会逃跑860", "publish_time": "Thu Dec 25 16:18:48 +0800 2025", "cleaned_text": "所以做出改正了吗", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.4361686676740646, "SnowNLP_label": "积极", "SnowNLP_score": 0.6331708614267806}, {"weibo_id": 5247820765337623, "user_name": "自由人的自由联合体", "publish_time": "Thu Dec 25 19:35:05 +0800 2025", "cleaned_text": "好的东西，我们也有义务大力宣传。转发广而告之！", "sentiment_label": "积极", "roBERTa_label": "积极", "roBERTa_score": 0.6921472015255246, "SnowNLP_label": "消极", "SnowNLP_score": 0.2065975221401694}, {"weibo_id": 5247727168652790, "user_name": "用户7527887512", "publish_time": "Fri Dec 26 02:17:50 +0800 2025", "cleaned_text": "他擅长的也是做预制菜啊，有啥好吃的，现在其他菜馆现炒的都很好吃", "sentiment_label": "消极", "roBERTa_label": "积极", "roBERTa_score": 0.8924549490213394, "SnowNLP_label": "消极", "SnowNLP_score": 0.4669859854243905}, {"weibo_id": 5247805493084602, "user_name": "小傲宇", "publish_time": "Thu Dec 25 18:33:50 +0800 2025", "cleaned_text": "这个看看就行了", "sentiment_label": "消极", "roBERTa_label": "积极", "roBERTa_score": 0.8008739876892583, "SnowNLP_label": "积极", "SnowNLP_score": 0.5495207667731629}, {"weibo_id": 5247787610407988, "user_name": "喜乐CNL", "publish_time": "Fri Dec 26 09:02:21 +0800 2025", "cleaned_text": "到现在还不知道自己错在哪里，又赖别人身上", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.1389988332324818, "SnowNLP_label": "积极", "SnowNLP_score": 0.6154191767586901}, {"weibo_id": 5247727168652790, "user_name": "跟着威哥混一天吃三顿", "publish_time": "Thu Dec 25 16:18:50 +0800 2025", "cleaned_text": "大家给他个机会，让他做大做强，再创辉煌", "sentiment_label": "积极", "roBERTa_label": "消极", "roBERTa_score": 0.2886370358634578, "SnowNLP_label": "积极", "SnowNLP_score": 0.9936055877678762}, {"weibo_id": 5247842043037478, "user_name": "格尔图腾那图鲁", "publish_time": "Fri Dec 26 18:42:54 +0800 2025", "cleaned_text": "这家伙看着不像好人", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.1077872205201556, "SnowNLP_label": "积极", "SnowNLP_score": 0.6011537926374235}, {"weibo_id": 5247787723391514, "user_name": "gagagagallllll", "publish_time": "Fri Dec 26 06:34:01 +0800 2025", "cleaned_text": "假如他学会了真的是好事吗", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.4976105436682701, "SnowNLP_label": "积极", "SnowNLP_score": 0.8311134044655768}, {"weibo_id": 5247751718965074, "user_name": "吾夫毛利兰", "publish_time": "Thu Dec 25 15:32:26 +0800 2025", "cleaned_text": "挺有道理的", "sentiment_label": "积极", "roBERTa_label": "消极", "roBERTa_score": 0.2798744522143415, "SnowNLP_label": "积极", "SnowNLP_score": 0.7852606424920389}, {"weibo_id": 5247742303539214, "user_name": "意心堂", "publish_time": "Thu Dec 25 17:45:34 +0800 2025", "cleaned_text": "前两个是错了，第三个没错。", "sentiment_label": "积极", "roBERTa_label": "积极", "roBERTa_score": 0.5367667070303472, "SnowNLP_label": "消极", "SnowNLP_score": 0.269224666477774}, {"weibo_id": 5247780399876620, "user_name": "一致的鹏远", "publish_time": "Thu Dec 25 22:53:25 +0800 2025", "cleaned_text": "贾老板开始还硬钢", "sentiment_label": "消极", "roBERTa_label": "积极", "roBERTa_score": 0.5654340535402298, "SnowNLP_label": "积极", "SnowNLP_score": 0.9557646796785128}, {"weibo_id": 5247727168652790, "user_name": "真贵的大猫熊", "publish_time": "Thu Dec 25 16:57:42 +0800 2025", "cleaned_text": "这等于一步都没对过啊", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.1014040597115142, "SnowNLP_label": "积极", "SnowNLP_score": 0.7631727131798711}, {"weibo_id": 5247774780035059, "user_name": "阿华0715", "publish_time": "Thu Dec 25 21:34:05 +0800 2025", "cleaned_text": "罗胖子就是网络黑社会。", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.0924853402753833, "SnowNLP_label": "积极", "SnowNLP_score": 0.9417028273920912}, {"weibo_id": 5247737916031167, "user_name": "貳等學生", "publish_time": "Thu Dec 25 21:12:07 +0800 2025", "cleaned_text": "平和的柚子也都出口欧盟（ 药也打呀）// 有点太土了//", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.2497786290781668, "SnowNLP_label": "积极", "SnowNLP_score": 0.8470343542514673}, {"weibo_id": 5247811357775439, "user_name": "麦花藏喜", "publish_time": "Mon Dec 29 13:41:31 +0800 2025", "cleaned_text": "对头", "sentiment_label": "积极", "roBERTa_label": "消极", "roBERTa_score": 0.1520222128127225, "SnowNLP_label": "积极", "SnowNLP_score": 0.5}, {"weibo_id": 5247768100867354, "user_name": "娱乐小福星", "publish_time": "Thu Dec 25 18:56:02 +0800 2025", "cleaned_text": "做餐饮一定要有良心", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.1196022911898011, "SnowNLP_label": "积极", "SnowNLP_score": 0.6073927503086781}, {"weibo_id": 5247774780035059, "user_name": "秋叶知音", "publish_time": "Thu Dec 25 16:17:58 +0800 2025", "cleaned_text": "还是需要深入研究新的食品法", "sentiment_label": "消极", "roBERTa_label": "积极", "roBERTa_score": 0.7475800189566133, "SnowNLP_label": "积极", "SnowNLP_score": 0.9743273977805152}, {"weibo_id": 5247761473865085, "user_name": "icyfiretc", "publish_time": "Thu Dec 25 15:27:35 +0800 2025", "cleaned_text": "这次这么正常，是把之前的公关团队辞了？", "sentiment_label": "积极", "roBERTa_label": "消极", "roBERTa_score": 0.4170516717433929, "SnowNLP_label": "消极", "SnowNLP_score": 0.2856685865599221}, {"weibo_id": 5247727168652790, "user_name": "想去看福宝和爱姐", "publish_time": "Thu Dec 25 15:00:07 +0800 2025", "cleaned_text": "这回的回答挺实在了，是换公共公司了吗", "sentiment_label": "积极", "roBERTa_label": "积极", "roBERTa_score": 0.8257822614301205, "SnowNLP_label": "消极", "SnowNLP_score": 0.0412126846343131}, {"weibo_id": 5247756614762686, "user_name": "Franz19", "publish_time": "Thu Dec 25 19:06:01 +0800 2025", "cleaned_text": "这段采访看着挺正常的，前段时间的回应真的很癫", "sentiment_label": "积极", "roBERTa_label": "消极", "roBERTa_score": 0.1404252895495844, "SnowNLP_label": "积极", "SnowNLP_score": 0.998477153955754}, {"weibo_id": 5247774780035059, "user_name": "心想事情2023", "publish_time": "Thu Dec 25 16:30:09 +0800 2025", "cleaned_text": "身体健康最重要", "sentiment_label": "积极", "roBERTa_label": "消极", "roBERTa_score": 0.2507074666086378, "SnowNLP_label": "积极", "SnowNLP_score": 0.9457551641719594}, {"weibo_id": 5247782623644861, "user_name": "云淡风轻的小微风", "publish_time": "Thu Dec 25 18:00:50 +0800 2025", "cleaned_text": "他终于醒了", "sentiment_label": "积极", "roBERTa_label": "积极", "roBERTa_score": 0.76991338827211, "SnowNLP_label": "消极", "SnowNLP_score": 0.2496654630598598}, {"weibo_id": 5247775948408371, "user_name": "瓯江时论", "publish_time": "Thu Dec 25 17:32:06 +0800 2025", "cleaned_text": "哈哈，贾老登差点没挺过来，还来这是非之地，吓得不够厉害", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.2108287091851378, "SnowNLP_label": "积极", "SnowNLP_score": 0.8732854765581104}, {"weibo_id": 5247742303539214, "user_name": "用户7742301276", "publish_time": "Thu Dec 25 17:04:57 +0800 2025", "cleaned_text": "别介呀，怂货", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.1069843663146551, "SnowNLP_label": "积极", "SnowNLP_score": 0.7392436449926905}, {"weibo_id": 5247737916031167, "user_name": "yugolou", "publish_time": "Thu Dec 25 13:49:02 +0800 2025", "cleaned_text": "他应该是没能力理解自己这次到底错哪了。", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.3967543870210647, "SnowNLP_label": "积极", "SnowNLP_score": 0.7288160621336367}, {"weibo_id": 5247756118790125, "user_name": "抑郁的瓜瓜子", "publish_time": "Thu Dec 25 15:08:12 +0800 2025", "cleaned_text": "高位之人易迷，信息匮乏显扰。", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.383903095126152, "SnowNLP_label": "积极", "SnowNLP_score": 0.8738701358837011}, {"weibo_id": 5247727168652790, "user_name": "一__人鱼鱼", "publish_time": "Thu Dec 25 16:56:35 +0800 2025", "cleaned_text": "所以你做的都是错的", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.1056350789926366, "SnowNLP_label": "积极", "SnowNLP_score": 0.6702235748013581}, {"weibo_id": 5247757474334944, "user_name": "用户6423644840", "publish_time": "Thu Dec 25 16:14:09 +0800 2025", "cleaned_text": "被互联网教训，这不准确，罗某代表不了网络界。", "sentiment_label": "消极", "roBERTa_label": "消极", "roBERTa_score": 0.1033511634044044, "SnowNLP_label": "积极", "SnowNLP_score": 0.905139460935554}, {"weibo_id": 5247737916031167, "user_name": "江亭水月", "publish_time": "Thu Dec 25 18:31:22 +0800 2025", "cleaned_text": "灾难级公关", "sentiment_label": "消极", "roBERTa_label": "积极", "roBERTa_score": 0.6231348067522049, "SnowNLP_label": "积极", "SnowNLP_score": 0.8325325400421854}], "roberta_summary": {"准确率": "83.84%", "Macro-F1": "0.8355", "积极F1": "0.8140", "消极F1": "0.8571", "TP": "35", "FP": "9", "FN": "7", "TN": "48"}, "snownlp_summary": {"准确率": "63.64%", "Macro-F1": "0.6333", "积极F1": "0.6667", "消极F1": "0.6000", "TP": "36", "FP": "30", "FN": "6", "TN": "27"}};
+    document.getElementById("ts").textContent = payload.timestamp;
+    document.getElementById("n").textContent = payload.total_samples;
+
+    function renderSummary(tableId, titleMap) {
+      const tbl = document.getElementById(tableId);
+      const rows = Object.entries(titleMap).map(([k,v]) => `<tr><th style="width: 140px;">${k}</th><td class="mono">${v}</td></tr>`).join("");
+      tbl.innerHTML = `<tbody>${rows}</tbody>`;
+    }
+
+    renderSummary("tbl_roberta", payload.roberta_summary);
+    renderSummary("tbl_snownlp", payload.snownlp_summary);
+
+    const rows = payload.error_rows || [];
+    const cols = rows.length ? Object.keys(rows[0]) : [];
+
+    const thead = document.getElementById("thead");
+    thead.innerHTML = cols.map(c => `<th>${c}</th>`).join("");
+
+    function badge(val) {
+      if (val === "积极") return `<span class="badge pos">${val}</span>`;
+      if (val === "消极") return `<span class="badge neg">${val}</span>`;
+      if (!val) return "";
+      return `<span class="badge unk">${val}</span>`;
+    }
+
+    function norm(v) {
+      return (v ?? "").toString().toLowerCase();
+    }
+
+    function isBinaryTruth(v) {
+      return v === "积极" || v === "消极";
+    }
+
+    function renderTable() {
+      const q = norm(document.getElementById("q").value);
+      const model = document.getElementById("model").value;
+      const onlyErr = document.getElementById("only_err").checked;
+
+      const filtered = rows.filter(r => {
+        const truth = r["sentiment_label"];
+        const bert = r["roBERTa_label"];
+        const snow = r["SnowNLP_label"];
+
+        if (onlyErr && isBinaryTruth(truth)) {
+          const bertOk = (bert === truth);
+          const snowOk = (snow === truth);
+          if (model === "roberta" && bertOk) return false;
+          if (model === "snownlp" && snowOk) return false;
+          if (model === "all" && bertOk && snowOk) return false;
+        } else if (onlyErr && !isBinaryTruth(truth)) {
+          return false;
+        } else {
+          if (model === "roberta" && bert === truth) return false;
+          if (model === "snownlp" && snow === truth) return false;
+        }
+
+        if (!q) return true;
+        return cols.some(c => norm(r[c]).includes(q));
+      });
+
+      document.getElementById("err_count").textContent = filtered.length;
+
+      const tbody = document.getElementById("tbody");
+      tbody.innerHTML = filtered.map(r => {
+        const tds = cols.map(c => {
+          const v = r[c];
+          if (c.endsWith("_label") || c === "sentiment_label") return `<td>${badge(v)}</td>`;
+          return `<td>${(v ?? "").toString()}</td>`;
+        }).join("");
+        return `<tr>${tds}</tr>`;
+      }).join("");
+    }
+
+    document.getElementById("q").addEventListener("input", renderTable);
+    document.getElementById("model").addEventListener("change", renderTable);
+    document.getElementById("only_err").addEventListener("change", renderTable);
+    renderTable();
+  </script>
+</body>
+</html>

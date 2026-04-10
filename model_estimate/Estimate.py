@@ -32,7 +32,6 @@ def compute_binary_metrics(truth, pred, positive_label="积极", negative_label=
     tn = int(((truth == negative_label) & (pred == negative_label)).sum())
     fp = int(((truth == negative_label) & (pred == positive_label)).sum())
     fn = int(((truth == positive_label) & (pred == negative_label)).sum())
-    unk = int((~pred.isin({positive_label, negative_label})).sum())
 
     total = int(len(truth))
     correct = tp + tn
@@ -65,7 +64,6 @@ def compute_binary_metrics(truth, pred, positive_label="积极", negative_label=
         "tn": tn,
         "fp": fp,
         "fn": fn,
-        "unknown_pred": unk,
         "precision_pos": precision_pos,
         "recall_pos": recall_pos,
         "f1_pos": f1_pos,
@@ -107,29 +105,35 @@ def generate_html_report(
     merged_df,
     keys,
     truth_col,
-    bert_metrics,
+    roberta_metrics,
     baseline_metrics,
     report_path,
 ):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    view_cols = keys + [truth_col, "BERT_label", "BERT_score", "SnowNLP_label", "SnowNLP_score"]
+    view_cols = keys + [
+        truth_col,
+        "roBERTa_label",
+        "roBERTa_score",
+        "SnowNLP_label",
+        "SnowNLP_score",
+    ]
     existing_view_cols = [c for c in view_cols if c in merged_df.columns]
     df_view = merged_df[existing_view_cols].copy()
 
     if truth_col in df_view.columns:
         df_view[truth_col] = df_view[truth_col].map(normalize_sentiment_label)
-    if "BERT_label" in df_view.columns:
-        df_view["BERT_label"] = df_view["BERT_label"].map(normalize_sentiment_label)
+    if "roBERTa_label" in df_view.columns:
+        df_view["roBERTa_label"] = df_view["roBERTa_label"].map(normalize_sentiment_label)
     if "SnowNLP_label" in df_view.columns:
         df_view["SnowNLP_label"] = df_view["SnowNLP_label"].map(normalize_sentiment_label)
 
     def is_error_row(row):
         truth = row.get(truth_col, "未知")
-        b = row.get("BERT_label", "未知")
+        b = row.get("roBERTa_label", "未知")
         s = row.get("SnowNLP_label", "未知")
         if truth not in {"积极", "消极"}:
-            return True
+            return False
         return (b != truth) or (s != truth)
 
     error_mask = df_view.apply(is_error_row, axis=1)
@@ -144,16 +148,15 @@ def generate_html_report(
         except Exception:
             return ""
 
-    bert_summary = {
-        "准确率": fmt_pct(bert_metrics["accuracy"]),
-        "Macro-F1": fmt_float(bert_metrics["macro_f1"]),
-        "积极F1": fmt_float(bert_metrics["f1_pos"]),
-        "消极F1": fmt_float(bert_metrics["f1_neg"]),
-        "未知预测数": str(bert_metrics["unknown_pred"]),
-        "TP": str(bert_metrics["tp"]),
-        "FP": str(bert_metrics["fp"]),
-        "FN": str(bert_metrics["fn"]),
-        "TN": str(bert_metrics["tn"]),
+    roberta_summary = {
+        "准确率": fmt_pct(roberta_metrics["accuracy"]),
+        "Macro-F1": fmt_float(roberta_metrics["macro_f1"]),
+        "积极F1": fmt_float(roberta_metrics["f1_pos"]),
+        "消极F1": fmt_float(roberta_metrics["f1_neg"]),
+        "TP": str(roberta_metrics["tp"]),
+        "FP": str(roberta_metrics["fp"]),
+        "FN": str(roberta_metrics["fn"]),
+        "TN": str(roberta_metrics["tn"]),
     }
 
     baseline_summary = {
@@ -161,7 +164,6 @@ def generate_html_report(
         "Macro-F1": fmt_float(baseline_metrics["macro_f1"]),
         "积极F1": fmt_float(baseline_metrics["f1_pos"]),
         "消极F1": fmt_float(baseline_metrics["f1_neg"]),
-        "未知预测数": str(baseline_metrics["unknown_pred"]),
         "TP": str(baseline_metrics["tp"]),
         "FP": str(baseline_metrics["fp"]),
         "FN": str(baseline_metrics["fn"]),
@@ -173,7 +175,7 @@ def generate_html_report(
             "timestamp": timestamp,
             "total_samples": int(len(merged_df)),
             "error_rows": error_rows,
-            "bert_summary": bert_summary,
+            "roberta_summary": roberta_summary,
             "snownlp_summary": baseline_summary,
         },
         ensure_ascii=False,
@@ -214,8 +216,8 @@ def generate_html_report(
 
   <div class="grid" style="margin-top: 14px;">
     <div class="card">
-      <div class="h2">BERT</div>
-      <table id="tbl_bert"></table>
+      <div class="h2">roBERTa</div>
+      <table id="tbl_roberta"></table>
     </div>
     <div class="card">
       <div class="h2">SnowNLP</div>
@@ -229,7 +231,7 @@ def generate_html_report(
       <input id="q" type="text" placeholder="搜索：文本/用户/ID/标签..." />
       <select id="model">
         <option value="all">显示全部</option>
-        <option value="bert">仅看 BERT 错误</option>
+        <option value="roberta">仅看 roBERTa 错误</option>
         <option value="snownlp">仅看 SnowNLP 错误</option>
       </select>
       <label><input id="only_err" type="checkbox" checked /> 只显示预测错误（真值为积极/消极）</label>
@@ -256,7 +258,7 @@ def generate_html_report(
       tbl.innerHTML = `<tbody>${{rows}}</tbody>`;
     }}
 
-    renderSummary("tbl_bert", payload.bert_summary);
+    renderSummary("tbl_roberta", payload.roberta_summary);
     renderSummary("tbl_snownlp", payload.snownlp_summary);
 
     const rows = payload.error_rows || [];
@@ -287,19 +289,19 @@ def generate_html_report(
 
       const filtered = rows.filter(r => {{
         const truth = r["{truth_col}"];
-        const bert = r["BERT_label"];
+        const bert = r["roBERTa_label"];
         const snow = r["SnowNLP_label"];
 
         if (onlyErr && isBinaryTruth(truth)) {{
           const bertOk = (bert === truth);
           const snowOk = (snow === truth);
-          if (model === "bert" && bertOk) return false;
+          if (model === "roberta" && bertOk) return false;
           if (model === "snownlp" && snowOk) return false;
           if (model === "all" && bertOk && snowOk) return false;
         }} else if (onlyErr && !isBinaryTruth(truth)) {{
           return false;
         }} else {{
-          if (model === "bert" && bert === truth) return false;
+          if (model === "roberta" && bert === truth) return false;
           if (model === "snownlp" && snow === truth) return false;
         }}
 
@@ -336,17 +338,17 @@ def generate_html_report(
 def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     sample_path = os.path.join(base_dir, "sample_target.csv")
-    bert_path = os.path.join(base_dir, "BERT_prediction.csv")
-    baseline_path = os.path.join(base_dir, "Baseline_prediction.csv")
+    roberta_path = os.path.join(base_dir, "roBERTa_sample_prediction.csv")
+    baseline_path = os.path.join(base_dir, "Baseline_sample_prediction.csv")
     report_path = os.path.join(base_dir, "estimate_report.html")
 
-    for p in [sample_path, bert_path, baseline_path]:
+    for p in [sample_path, roberta_path, baseline_path]:
         if not os.path.exists(p):
             print(f"文件不存在: {p}")
             return
 
     sample_df = load_csv(sample_path)
-    bert_df = load_csv(bert_path)
+    roberta_df = load_csv(roberta_path)
     baseline_df = load_csv(baseline_path)
 
     truth_col = "sentiment_label"
@@ -356,10 +358,10 @@ def main():
 
     merged, keys = merge_predictions(
         sample_df,
-        bert_df,
+        roberta_df,
         pred_label_col="sentiment_label",
         pred_score_col="sentiment_score",
-        prefix="BERT",
+        prefix="roBERTa",
     )
 
     merged, _ = merge_predictions(
@@ -370,18 +372,18 @@ def main():
         prefix="SnowNLP",
     )
 
-    if "BERT_label" not in merged.columns or "SnowNLP_label" not in merged.columns:
+    if "roBERTa_label" not in merged.columns or "SnowNLP_label" not in merged.columns:
         print("预测文件缺少 sentiment_label 列，无法评估")
         return
 
-    bert_metrics = compute_binary_metrics(merged[truth_col], merged["BERT_label"])
+    roberta_metrics = compute_binary_metrics(merged[truth_col], merged["roBERTa_label"])
     baseline_metrics = compute_binary_metrics(merged[truth_col], merged["SnowNLP_label"])
 
     generate_html_report(
         merged_df=merged,
         keys=keys,
         truth_col=truth_col,
-        bert_metrics=bert_metrics,
+        roberta_metrics=roberta_metrics,
         baseline_metrics=baseline_metrics,
         report_path=report_path,
     )

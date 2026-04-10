@@ -42,7 +42,7 @@ def main():
 
     print(f"待分析文本条数: {len(texts)}")
 
-    model_name = "uer/roberta-base-finetuned-jd-binary-chinese"
+    model_name = "google-bert/bert-base-chinese"
 
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -51,7 +51,7 @@ def main():
             "sentiment-analysis",
             model=model,
             tokenizer=tokenizer,
-            device=-1,
+            device=0,
         )
     except Exception as e:
         print(f"模型加载失败: {e}")
@@ -65,7 +65,13 @@ def main():
         try:
             result = clf(text[:510], truncation=True, max_length=512)
             lbl = map_label(result[0]["label"])
-            score = float(result[0]["score"])
+            conf = float(result[0]["score"])
+            if lbl == "积极":
+                score = 0.5 + 0.5 * conf
+            elif lbl == "消极":
+                score = 0.5 - 0.5 * conf
+            else:
+                score = 0.5
         except Exception:
             lbl = "消极"
             score = 0.0
