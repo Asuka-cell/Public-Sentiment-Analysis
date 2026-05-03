@@ -37,7 +37,11 @@ PROXY_LIST = [
     # "112.13.209.132:8080"
 ]
 
-PROGRESS_FILE = 'progress.txt'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(BASE_DIR)
+DATASET_DIR = os.path.join(PROJECT_DIR, "dataset")
+
+PROGRESS_FILE = os.path.join(BASE_DIR, "progress.txt")
 csv_lock = threading.Lock()
 
 REQUEST_DELAY_RANGE = (1.2, 2.5)
@@ -58,13 +62,13 @@ proxy_valid_cache = {}
 proxy_fail_counts = {}
 proxy_success_counts = {}
 
-LATEST_ID_FILE = "latest_weibo_id.json"
-WEIBO_TEXTS_CSV = "weibo_posts.csv"
-WEIBO_COMMENTS_CSV = "weibo_comments.csv"
-DEBUG_DUMP_DIR = "debug_weibo"
+LATEST_ID_FILE = os.path.join(BASE_DIR, "latest_weibo_id.json")
+WEIBO_TEXTS_CSV = os.path.join(DATASET_DIR, "weibo_posts.csv")
+WEIBO_COMMENTS_CSV = os.path.join(DATASET_DIR, "weibo_comments.csv")
+DEBUG_DUMP_DIR = os.path.join(BASE_DIR, "debug_weibo")
 DEBUG_DUMP_LIMIT = 5
 debug_dump_count = 0
-PROXY_SOURCE_FILE = "proxies.txt"
+PROXY_SOURCE_FILE = os.path.join(BASE_DIR, "proxies.txt")
 proxy_source_mtime = 0.0
 
 def human_sleep(base_range, long_prob=0.08, long_range=(8, 15)):
@@ -222,7 +226,7 @@ def request_with_retry(url, cookies, headers, params=None, max_retries=3):
 def get_cookie_dict():
     """从cookies.txt加载cookie并返回字典"""
     try:
-        with open("cookies.txt", "r", encoding="utf-8") as f:
+        with open(os.path.join(BASE_DIR, "cookies.txt"), "r", encoding="utf-8") as f:
             cookies_list = json.load(f)
         return {c['name']: c['value'] for c in cookies_list}
     except FileNotFoundError:
@@ -716,6 +720,7 @@ def should_fetch_by_latest_id(weibo_id, latest_id_value):
     return wid > latest
 
 def main():
+    os.makedirs(DATASET_DIR, exist_ok=True)
     # 1. 加载 Cookie
     cookies = get_cookie_dict()
     if not cookies:
@@ -723,11 +728,11 @@ def main():
 
     # 2. 读取 weibo_ids.txt
     try:
-        with open("weibo_ids.txt", "r", encoding="utf-8") as f:
+        with open(os.path.join(BASE_DIR, "weibo_ids.txt"), "r", encoding="utf-8") as f:
             # 读取所有行，去除空白字符
             all_weibo_ids = [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        print("weibo_ids.txt not found. Please run GetWeiboIdList copy.py first.")
+        print("weibo_ids.txt not found. Please run GetWeiboIdList.py first.")
         return
 
     latest_ids = load_latest_ids()

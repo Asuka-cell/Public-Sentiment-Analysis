@@ -141,12 +141,12 @@ def main():
     os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
     model_dir = os.path.dirname(os.path.abspath(__file__))
-    project_dir = os.path.dirname(model_dir)
+    project_dir = os.path.dirname(os.path.dirname(os.path.dirname(model_dir)))
 
     input_full = os.path.join(project_dir, "dataset", "weibo_comments_cleaned.csv")
-    input_sample = os.path.join(project_dir, "model_estimate", "sample_input.csv")
+    input_sample = os.path.join(project_dir, "model_estimate", "weibo", "sample_input.csv")
     output_full = os.path.join(project_dir, "model_prediction", "roBERTa_prediction.csv")
-    output_sample = os.path.join(project_dir, "model_estimate", "roBERTa_sample_prediction.csv")
+    output_sample = os.path.join(project_dir, "model_estimate", "weibo", "roBERTa_sample_prediction.csv")
 
     if sys.stdin.isatty():
         mode = choose_mode_interactively()

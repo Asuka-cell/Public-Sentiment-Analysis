@@ -210,11 +210,13 @@ def get_pc_search_weibo_ids(keyword, max_pages=None, output_path=None):
     :param output_path: 实时写入的输出文件路径（可选）
     """
     # 1. 加载 Cookies
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    cookies_path = os.path.join(base_dir, "cookies.txt")
     try:
-        with open("cookies.txt", "r", encoding="utf-8") as f:
+        with open(cookies_path, "r", encoding="utf-8") as f:
             cookies_list = json.load(f)
     except FileNotFoundError:
-        print("cookies.txt not found.")
+        print(f"cookies.txt not found: {cookies_path}")
         return []
 
     # 将 Cookie 列表转换为字典供 requests 使用
@@ -229,9 +231,13 @@ def get_pc_search_weibo_ids(keyword, max_pages=None, output_path=None):
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
     }
 
-    all_weibo_ids, seen_ids = load_existing_ids(output_path)
-    if output_path and all_weibo_ids:
-        print(f"检测到已有 {len(all_weibo_ids)} 条ID，将继续追加写入: {output_path}")
+    all_weibo_ids = []
+    seen_ids = set()
+    if output_path:
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            _ = f
+        print(f"将写入输出文件: {output_path}")
 
     page = 1
     consecutive_empty_pages = 0
@@ -271,6 +277,7 @@ def get_pc_search_weibo_ids(keyword, max_pages=None, output_path=None):
         ]
         if any(m in html for m in blocked_markers):
             consecutive_block_pages += 1
+            print("   [反爬] 命中风控标记，本页跳过，稍后重试。")
             if consecutive_block_pages >= 5:
                 break
             time.sleep(random.uniform(12, 25))
@@ -279,20 +286,22 @@ def get_pc_search_weibo_ids(keyword, max_pages=None, output_path=None):
 
         found_ids = extract_weibo_ids_from_html(html)
         found_ids = sorted(set(found_ids), reverse=True)
+        print(f"   [解析] 本页解析到 mid 数量: {len(found_ids)}")
 
         if not found_ids:
             consecutive_empty_pages += 1
+            print(f"   [解析] 本页未解析到 mid，连续空页: {consecutive_empty_pages}")
             if consecutive_empty_pages >= 10:
                 break
         else:
             consecutive_empty_pages = 0
-            new_ids = []
-            for mid in found_ids:
-                if mid not in seen_ids:
-                    seen_ids.add(mid)
-                    all_weibo_ids.append(mid)
-                    new_ids.append(mid)
-            append_ids(output_path, new_ids)
+            new_ids = [mid for mid in found_ids if mid not in seen_ids]
+            for mid in new_ids:
+                seen_ids.add(mid)
+                all_weibo_ids.append(mid)
+            if output_path:
+                append_ids(output_path, new_ids)
+            print(f"   [新增] 新增ID: {len(new_ids)} | 累计ID: {len(all_weibo_ids)}")
 
         page += 1
 
@@ -300,7 +309,8 @@ def get_pc_search_weibo_ids(keyword, max_pages=None, output_path=None):
 
 if __name__ == "__main__":
     keyword = input("请输入搜索关键词 (例如 '西贝预制菜'): ")
-    output_path = "/Users/asuka/项目/publicSentimentAnalysis/Public-Sentiment-Analysis/weibo_ids.txt"
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    output_path = os.path.join(base_dir, "weibo_ids.txt")
     ids = get_pc_search_weibo_ids(keyword, max_pages=None, output_path=output_path)
     print(f"\n共获取到 {len(ids)} 个有效 ID (已去重)")
     print(f"ID 已保存到 {output_path}")

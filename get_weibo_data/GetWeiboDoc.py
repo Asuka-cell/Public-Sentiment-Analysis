@@ -14,9 +14,11 @@ def safe_str(value):
 
 def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    posts_path = os.path.join(base_dir, "weibo_posts_cleaned.csv")
-    comments_path = os.path.join(base_dir, "weibo_comments_cleaned.csv")
-    output_path = os.path.join(base_dir, "weibo_doc.jsonl")
+    project_dir = os.path.dirname(base_dir)
+    dataset_dir = os.path.join(project_dir, "dataset")
+    posts_path = os.path.join(dataset_dir, "weibo_posts_cleaned.csv")
+    comments_path = os.path.join(dataset_dir, "weibo_comments_cleaned.csv")
+    output_path = os.path.join(dataset_dir, "weibo_doc.jsonl")
 
     try:
         posts_df = pd.read_csv(posts_path, encoding="utf-8-sig")

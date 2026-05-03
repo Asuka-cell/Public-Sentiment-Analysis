@@ -20,13 +20,19 @@ Thumbs.db
 /dataset/
 /model_estimate/*.csv
 /model_estimate/*.html
+/model_estimate/weibo/
+/model_estimate/zhihu/
 /get_weibo_data/*.txt
 /get_weibo_data/*.json
 /get_weibo_data/*.csv
-/model_prediction/*_prediction.csv
+/get_zhihu_data/*.txt
+/get_zhihu_data/*.json
+/get_zhihu_data/*.csv
+/model_prediction/**/prediction/
+/model_train_outputs/
 
 # Large topic-model artifacts
-model_prediction/bertopic_output/
+model_prediction/**/bertopic_output*/
 
 debug_weibo/
 其它/

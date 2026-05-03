@@ -3,12 +3,10 @@ import json
 import os
 import re
 import shutil
+import sys
 from datetime import datetime
 
-_STOP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stopwords")
-DEFAULT_COMMON_STOPWORDS_PATH = os.path.join(_STOP_DIR, "common_stopwords.txt")
-DEFAULT_EVENT_STOPWORDS_PATH = os.path.join(_STOP_DIR, "event_stopwords.txt")
-STOP_WORDS = set()
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 DEFAULT_ASPECT_KEYWORDS = {
     "食品安全与卫生": {
@@ -132,6 +130,9 @@ def load_stop_words(path):
     return words
 
 
+STOP_WORDS = set()
+
+
 def jieba_tokenizer(text):
     import jieba
 
@@ -153,25 +154,13 @@ def jieba_tokenizer(text):
 
 
 def normalize_doc_text(text):
-    t = "" if text is None else str(text)
-    t = re.sub(r"\d+\s*天后", " ", t)
-    t = re.sub(r"\b\d+\b", " ", t)
-    t = re.sub(r"\s+", " ", t).strip()
-    return t
-
-
-def read_jsonl(path):
-    records = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(json.loads(line))
-            except Exception:
-                continue
-    return records
+    s = "" if text is None else str(text)
+    s = s.replace("\u200b", " ")
+    s = re.sub(r"<[^>]+>", " ", s)
+    s = s.replace("[图片]", " ")
+    s = re.sub(r"http[s]?://\S+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 
 def ensure_dir(path):
@@ -184,6 +173,8 @@ def clear_output_dir(output_dir):
         "topic_info.csv",
         "doc_topics.csv",
         "topics.json",
+        "aspect_map.json",
+        "aspect_stats.csv",
     }
     if not os.path.isdir(output_dir):
         return
@@ -200,31 +191,52 @@ def clear_output_dir(output_dir):
                 pass
 
 
+def choose_mode_interactively():
+    prompt = (
+        "\n请选择运行模式:\n"
+        "  1) 样本\n"
+        "  2) 全量\n"
+        "输入选项(1/2): "
+    )
+    s = input(prompt).strip()
+    if s == "1":
+        return "sample"
+    if s == "2":
+        return "full"
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--input",
-        default=os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "dataset",
-            "weibo_doc_cleaned.jsonl",
-        ),
-    )
-    parser.add_argument(
-        "--output_dir",
-        default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "bertopic_output"),
-    )
+    model_dir = os.path.dirname(os.path.abspath(__file__))
+    zhihu_dir = os.path.dirname(model_dir)
+    project_dir = os.path.dirname(os.path.dirname(zhihu_dir))
+    estimate_dir = os.path.join(project_dir, "model_estimate", "zhihu")
+    stop_dir = os.path.join(os.path.dirname(zhihu_dir), "stopwords")
+    default_common = os.path.join(stop_dir, "common_stopwords.txt")
+    default_event = os.path.join(stop_dir, "event_stopwords.txt")
+
+    parser.add_argument("--input", default=os.path.join(project_dir, "dataset", "zhihu_answers_cleaned.csv"))
+    parser.add_argument("--output_dir", default=os.path.join(zhihu_dir, "prediction", "bertopic_output"))
     parser.add_argument("--embedding_model", default="shibing624/text2vec-base-chinese")
     parser.add_argument("--min_topic_size", type=int, default=15)
     parser.add_argument("--nr_topics", default=None)
-    parser.add_argument("--stopwords_common", default=DEFAULT_COMMON_STOPWORDS_PATH)
-    parser.add_argument("--stopwords_event", default=DEFAULT_EVENT_STOPWORDS_PATH)
+    parser.add_argument("--stopwords_common", default=default_common)
+    parser.add_argument("--stopwords_event", default=default_event)
     parser.add_argument("--hf_endpoint", default="https://hf-mirror.com")
     parser.add_argument("--cache_dir", default=None)
     parser.add_argument("--local_files_only", action="store_true")
     parser.add_argument("--device", default=None)
     parser.add_argument("--keep_history", action="store_true")
     args = parser.parse_args()
+
+    if sys.stdin.isatty():
+        mode = choose_mode_interactively()
+    else:
+        mode = "sample"
+    if mode is None:
+        print("无效输入，程序结束。")
+        return
 
     try:
         from bertopic import BERTopic
@@ -254,43 +266,49 @@ def main():
         print("请安装: /usr/bin/python3 -m pip install --user scikit-learn")
         return
 
-    input_path = args.input
-    output_dir = args.output_dir
-    ensure_dir(output_dir)
-    if not args.keep_history:
-        clear_output_dir(output_dir)
-
     if args.hf_endpoint and not os.environ.get("HF_ENDPOINT"):
         os.environ["HF_ENDPOINT"] = args.hf_endpoint
 
+    input_path = os.path.join(estimate_dir, "sample_input.csv") if mode == "sample" else args.input
     if not os.path.exists(input_path):
         print(f"输入文件不存在: {input_path}")
         return
 
-    records = read_jsonl(input_path)
-    if not records:
-        print(f"输入文件为空或无法解析: {input_path}")
+    output_dir = args.output_dir if mode == "full" else f"{args.output_dir}_sample"
+    ensure_dir(output_dir)
+    if not args.keep_history:
+        clear_output_dir(output_dir)
+
+    try:
+        import pandas as pd
+    except Exception as e:
+        print(f"导入 pandas 失败: {e}")
         return
 
-    weibo_ids = []
-    docs = []
-    for r in records:
-        wid = str(r.get("weibo_id", "")).strip()
-        text = r.get("text", "")
-        if not wid:
-            continue
-        if not isinstance(text, str):
-            text = "" if text is None else str(text)
-        text = text.strip()
-        text = normalize_doc_text(text)
-        if not text:
-            continue
-        weibo_ids.append(wid)
-        docs.append(text)
+    try:
+        df = pd.read_csv(input_path, encoding="utf-8-sig")
+    except Exception:
+        df = pd.read_csv(input_path)
 
-    if not docs:
+    if "answer_id" not in df.columns:
+        print("输入文件缺少 answer_id 列")
+        return
+    text_col = "content" if "content" in df.columns else ("cleaned_text" if "cleaned_text" in df.columns else "text")
+    if text_col not in df.columns:
+        print("输入文件缺少可用的文本列（content/cleaned_text/text）")
+        return
+
+    answer_ids = df["answer_id"].fillna("").astype(str).str.strip().tolist()
+    question_ids = df["question_id"].fillna("").astype(str).str.strip().tolist() if "question_id" in df.columns else [""] * len(df)
+    docs = [normalize_doc_text(x) for x in df[text_col].fillna("").astype(str).tolist()]
+    keep = [(aid, qid, d) for aid, qid, d in zip(answer_ids, question_ids, docs) if aid and d]
+    if not keep:
         print("没有可用的文本用于建模")
         return
+
+    answer_ids = [x[0] for x in keep]
+    question_ids = [x[1] for x in keep]
+    docs = [x[2] for x in keep]
 
     nr_topics = args.nr_topics
     if isinstance(nr_topics, str) and nr_topics.lower() == "none":
@@ -347,8 +365,8 @@ def main():
     topics, probs = topic_model.fit_transform(docs)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_dir = os.path.join(output_dir, f"bertopic_model_{ts}") if args.keep_history else os.path.join(output_dir, "bertopic_model")
-    topic_model.save(model_dir, serialization="pickle", save_embedding_model=True)
+    model_dir_out = os.path.join(output_dir, f"bertopic_model_{ts}") if args.keep_history else os.path.join(output_dir, "bertopic_model")
+    topic_model.save(model_dir_out, serialization="pickle", save_embedding_model=True)
 
     topic_info_path = os.path.join(output_dir, f"topic_info_{ts}.csv") if args.keep_history else os.path.join(output_dir, "topic_info.csv")
     topic_model.get_topic_info().to_csv(topic_info_path, index=False, encoding="utf-8-sig")
@@ -375,8 +393,6 @@ def main():
                 continue
             hit = 0
             for kw in kws:
-                if not kw:
-                    continue
                 kw2 = str(kw).strip().lower()
                 if not kw2:
                     continue
@@ -415,56 +431,49 @@ def main():
             continue
         topic_aspect_map[str(tid)] = map_topic_to_aspect(words)
 
-    aspect_map_path = os.path.join(output_dir, f"aspect_map_{ts}.json") if args.keep_history else os.path.join(output_dir, "aspect_map.json")
-
     doc_topics_path = os.path.join(output_dir, f"doc_topics_{ts}.csv") if args.keep_history else os.path.join(output_dir, "doc_topics.csv")
     rows = []
-    for wid, topic, prob in zip(weibo_ids, topics, probs if probs is not None else [None] * len(topics)):
+    for aid, qid, topic, prob in zip(answer_ids, question_ids, topics, probs if probs is not None else [None] * len(topics)):
         p = None
         if prob is not None:
             try:
                 p = float(max(prob))
             except Exception:
                 p = None
-        rows.append({"weibo_id": wid, "topic": int(topic) if topic is not None else None, "probability": p})
-
-    try:
-        import pandas as pd
-    except Exception:
-        pd = None
-
-    if pd is not None:
-        doc_df = pd.DataFrame(rows)
-        doc_df["topic"] = doc_df["topic"].astype("Int64")
-        doc_df["aspect"] = doc_df["topic"].astype(str).map(topic_aspect_map).fillna("其他")
-        doc_df.to_csv(doc_topics_path, index=False, encoding="utf-8-sig")
-
-        aspect_stats_path = (
-            os.path.join(output_dir, f"aspect_stats_{ts}.csv")
-            if args.keep_history
-            else os.path.join(output_dir, "aspect_stats.csv")
+        rows.append(
+            {
+                "answer_id": str(aid),
+                "question_id": str(qid),
+                "topic": int(topic) if topic is not None else None,
+                "probability": p,
+            }
         )
-        stats = (
-            doc_df.groupby("aspect", dropna=False)
-            .agg(doc_count=("weibo_id", "count"), mean_topic_prob=("probability", "mean"))
-            .reset_index()
-            .sort_values(["doc_count", "aspect"], ascending=[False, True])
-        )
-        stats.to_csv(aspect_stats_path, index=False, encoding="utf-8-sig")
-    else:
-        with open(doc_topics_path, "w", encoding="utf-8") as f:
-            f.write("weibo_id,topic,probability,aspect\n")
-            for r in rows:
-                aspect = topic_aspect_map.get(str(r.get("topic")), "其他")
-                f.write(f"{r['weibo_id']},{r['topic']},{'' if r['probability'] is None else r['probability']},{aspect}\n")
 
+    doc_df = pd.DataFrame(rows)
+    doc_df["topic"] = doc_df["topic"].astype("Int64")
+    doc_df["aspect"] = doc_df["topic"].astype(str).map(topic_aspect_map).fillna("其他")
+    doc_df.to_csv(doc_topics_path, index=False, encoding="utf-8-sig")
+
+    aspect_stats_path = (
+        os.path.join(output_dir, f"aspect_stats_{ts}.csv")
+        if args.keep_history
+        else os.path.join(output_dir, "aspect_stats.csv")
+    )
+    stats = (
+        doc_df.groupby("aspect", dropna=False)
+        .agg(doc_count=("answer_id", "count"), mean_topic_prob=("probability", "mean"))
+        .reset_index()
+        .sort_values(["doc_count", "aspect"], ascending=[False, True])
+    )
+    stats.to_csv(aspect_stats_path, index=False, encoding="utf-8-sig")
+
+    aspect_map_path = os.path.join(output_dir, f"aspect_map_{ts}.json") if args.keep_history else os.path.join(output_dir, "aspect_map.json")
     with open(topics_path, "w", encoding="utf-8") as f:
         json.dump(topic_words, f, ensure_ascii=False, indent=2)
-
     with open(aspect_map_path, "w", encoding="utf-8") as f:
         json.dump(topic_aspect_map, f, ensure_ascii=False, indent=2)
 
-    print(f"模型目录: {model_dir}")
+    print(f"模型目录: {model_dir_out}")
     print(f"主题概览: {topic_info_path}")
     print(f"文档主题: {doc_topics_path}")
     print(f"主题词表: {topics_path}")

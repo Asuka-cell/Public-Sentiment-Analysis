@@ -81,8 +81,7 @@ def load_csv(path):
         return pd.read_csv(path)
 
 
-def merge_predictions(sample_df, pred_df, pred_label_col, pred_score_col, prefix):
-    key_cols = ["weibo_id", "user_name", "publish_time", "cleaned_text"]
+def merge_predictions(sample_df, pred_df, pred_label_col, pred_score_col, prefix, key_cols):
     keys = [c for c in key_cols if c in sample_df.columns and c in pred_df.columns]
     if not keys:
         raise ValueError("无法找到可用于对齐样本与预测结果的共同键列")
@@ -106,15 +105,23 @@ def generate_html_report(
     keys,
     truth_col,
     roberta_metrics,
+    roberta_origin_metrics,
+    roberta_fit_metrics,
     baseline_metrics,
     report_path,
 ):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    view_cols = keys + [
+    text_cols = ["content", "post_cleaned_text", "cleaned_text", "text"]
+    extra_text_cols = [c for c in text_cols if c in merged_df.columns and c not in keys]
+    view_cols = keys + extra_text_cols + [
         truth_col,
         "roBERTa_label",
         "roBERTa_score",
+        "roBERTa_origin_label",
+        "roBERTa_origin_score",
+        "roBERTa_fit_label",
+        "roBERTa_fit_score",
         "SnowNLP_label",
         "SnowNLP_score",
     ]
@@ -125,16 +132,20 @@ def generate_html_report(
         df_view[truth_col] = df_view[truth_col].map(normalize_sentiment_label)
     if "roBERTa_label" in df_view.columns:
         df_view["roBERTa_label"] = df_view["roBERTa_label"].map(normalize_sentiment_label)
+    if "roBERTa_origin_label" in df_view.columns:
+        df_view["roBERTa_origin_label"] = df_view["roBERTa_origin_label"].map(normalize_sentiment_label)
     if "SnowNLP_label" in df_view.columns:
         df_view["SnowNLP_label"] = df_view["SnowNLP_label"].map(normalize_sentiment_label)
 
     def is_error_row(row):
         truth = row.get(truth_col, "未知")
         b = row.get("roBERTa_label", "未知")
+        o = row.get("roBERTa_origin_label", "未知")
+        f = row.get("roBERTa_fit_label", "未知")
         s = row.get("SnowNLP_label", "未知")
         if truth not in {"积极", "消极"}:
             return False
-        return (b != truth) or (s != truth)
+        return (b != truth) or (o != truth) or (f != truth) or (s != truth)
 
     error_mask = df_view.apply(is_error_row, axis=1)
     error_rows = df_view[error_mask].fillna("").to_dict(orient="records")
@@ -159,6 +170,30 @@ def generate_html_report(
         "TN": str(roberta_metrics["tn"]),
     }
 
+    roberta_origin_summary = None
+    if roberta_origin_metrics is not None and int(roberta_origin_metrics.get("total") or 0) > 0:
+        roberta_origin_summary = {
+            "准确率": fmt_pct(roberta_origin_metrics["accuracy"]),
+            "Macro-F1": fmt_float(roberta_origin_metrics["macro_f1"]),
+            "积极F1": fmt_float(roberta_origin_metrics["f1_pos"]),
+            "消极F1": fmt_float(roberta_origin_metrics["f1_neg"]),
+            "TP": str(roberta_origin_metrics["tp"]),
+            "FP": str(roberta_origin_metrics["fp"]),
+            "FN": str(roberta_origin_metrics["fn"]),
+            "TN": str(roberta_origin_metrics["tn"]),
+        }
+
+    roberta_fit_summary = {
+        "准确率": fmt_pct(roberta_fit_metrics["accuracy"]),
+        "Macro-F1": fmt_float(roberta_fit_metrics["macro_f1"]),
+        "积极F1": fmt_float(roberta_fit_metrics["f1_pos"]),
+        "消极F1": fmt_float(roberta_fit_metrics["f1_neg"]),
+        "TP": str(roberta_fit_metrics["tp"]),
+        "FP": str(roberta_fit_metrics["fp"]),
+        "FN": str(roberta_fit_metrics["fn"]),
+        "TN": str(roberta_fit_metrics["tn"]),
+    }
+
     baseline_summary = {
         "准确率": fmt_pct(baseline_metrics["accuracy"]),
         "Macro-F1": fmt_float(baseline_metrics["macro_f1"]),
@@ -176,6 +211,8 @@ def generate_html_report(
             "total_samples": int(len(merged_df)),
             "error_rows": error_rows,
             "roberta_summary": roberta_summary,
+            "roberta_origin_summary": roberta_origin_summary,
+            "roberta_fit_summary": roberta_fit_summary,
             "snownlp_summary": baseline_summary,
         },
         ensure_ascii=False,
@@ -219,6 +256,14 @@ def generate_html_report(
       <div class="h2">roBERTa</div>
       <table id="tbl_roberta"></table>
     </div>
+    <div class="card" id="card_roberta_origin" style="display:none;">
+      <div class="h2">roBERTa（Origin / No Topic Fusion）</div>
+      <table id="tbl_roberta_origin"></table>
+    </div>
+    <div class="card">
+      <div class="h2">roBERTa（Fine-tuned）</div>
+      <table id="tbl_roberta_fit"></table>
+    </div>
     <div class="card">
       <div class="h2">SnowNLP</div>
       <table id="tbl_snownlp"></table>
@@ -232,6 +277,8 @@ def generate_html_report(
       <select id="model">
         <option value="all">显示全部</option>
         <option value="roberta">仅看 roBERTa 错误</option>
+        <option value="roberta_origin">仅看 roBERTa（Origin）错误</option>
+        <option value="roberta_fit">仅看 roBERTa（Fine-tuned）错误</option>
         <option value="snownlp">仅看 SnowNLP 错误</option>
       </select>
       <label><input id="only_err" type="checkbox" checked /> 只显示预测错误（真值为积极/消极）</label>
@@ -259,7 +306,16 @@ def generate_html_report(
     }}
 
     renderSummary("tbl_roberta", payload.roberta_summary);
+    if (payload.roberta_origin_summary) {{
+      document.getElementById("card_roberta_origin").style.display = "";
+      renderSummary("tbl_roberta_origin", payload.roberta_origin_summary);
+    }}
+    renderSummary("tbl_roberta_fit", payload.roberta_fit_summary);
     renderSummary("tbl_snownlp", payload.snownlp_summary);
+
+    function pct(v) {{
+      try {{ return `${{(parseFloat(v) * 100).toFixed(2)}}%`; }} catch (e) {{ return ""; }}
+    }}
 
     const rows = payload.error_rows || [];
     const cols = rows.length ? Object.keys(rows[0]) : [];
@@ -290,18 +346,26 @@ def generate_html_report(
       const filtered = rows.filter(r => {{
         const truth = r["{truth_col}"];
         const bert = r["roBERTa_label"];
+        const orig = r["roBERTa_origin_label"];
+        const fit = r["roBERTa_fit_label"];
         const snow = r["SnowNLP_label"];
 
         if (onlyErr && isBinaryTruth(truth)) {{
           const bertOk = (bert === truth);
+          const origOk = (orig === truth);
+          const fitOk = (fit === truth);
           const snowOk = (snow === truth);
           if (model === "roberta" && bertOk) return false;
+          if (model === "roberta_origin" && origOk) return false;
+          if (model === "roberta_fit" && fitOk) return false;
           if (model === "snownlp" && snowOk) return false;
-          if (model === "all" && bertOk && snowOk) return false;
+          if (model === "all" && bertOk && origOk && fitOk && snowOk) return false;
         }} else if (onlyErr && !isBinaryTruth(truth)) {{
           return false;
         }} else {{
           if (model === "roberta" && bert === truth) return false;
+          if (model === "roberta_origin" && orig === truth) return false;
+          if (model === "roberta_fit" && fit === truth) return false;
           if (model === "snownlp" && snow === truth) return false;
         }}
 
@@ -337,58 +401,102 @@ def generate_html_report(
 
 def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    sample_path = os.path.join(base_dir, "sample_target.csv")
-    roberta_path = os.path.join(base_dir, "roBERTa_sample_prediction.csv")
-    baseline_path = os.path.join(base_dir, "Baseline_sample_prediction.csv")
-    report_path = os.path.join(base_dir, "estimate_report.html")
+    def run_for_dataset(dataset: str, key_cols):
+        est_dir = os.path.join(base_dir, dataset)
+        sample_path = os.path.join(est_dir, "sample_target.csv")
+        roberta_path = os.path.join(est_dir, "roBERTa_sample_prediction.csv")
+        roberta_origin_path = os.path.join(est_dir, "roBERTa_origin_sample_prediction.csv")
+        roberta_fit_path = os.path.join(est_dir, "roBERTa_fit_sample_prediction.csv")
+        baseline_path = os.path.join(est_dir, "Baseline_sample_prediction.csv")
+        report_path = os.path.join(est_dir, "estimate_report.html")
 
-    for p in [sample_path, roberta_path, baseline_path]:
-        if not os.path.exists(p):
-            print(f"文件不存在: {p}")
-            return
+        required = [sample_path, roberta_path, baseline_path]
+        missing = [p for p in required if not os.path.exists(p)]
+        if missing:
+            print(f"[{dataset}] 缺少评估所需文件，已跳过")
+            return None
 
-    sample_df = load_csv(sample_path)
-    roberta_df = load_csv(roberta_path)
-    baseline_df = load_csv(baseline_path)
+        sample_df = load_csv(sample_path)
+        roberta_df = load_csv(roberta_path)
+        baseline_df = load_csv(baseline_path)
+        roberta_origin_df = load_csv(roberta_origin_path) if os.path.exists(roberta_origin_path) else None
+        roberta_fit_df = load_csv(roberta_fit_path) if os.path.exists(roberta_fit_path) else None
 
-    truth_col = "sentiment_label"
-    if truth_col not in sample_df.columns:
-        print(f"样本文件缺少列: {truth_col}")
-        return
+        truth_col = "sentiment_label"
+        if truth_col not in sample_df.columns:
+            print(f"[{dataset}] 样本文件缺少列: {truth_col}")
+            return None
 
-    merged, keys = merge_predictions(
-        sample_df,
-        roberta_df,
-        pred_label_col="sentiment_label",
-        pred_score_col="sentiment_score",
-        prefix="roBERTa",
-    )
+        merged, keys = merge_predictions(
+            sample_df,
+            roberta_df,
+            pred_label_col="sentiment_label",
+            pred_score_col="sentiment_score",
+            prefix="roBERTa",
+            key_cols=key_cols,
+        )
 
-    merged, _ = merge_predictions(
-        merged,
-        baseline_df,
-        pred_label_col="sentiment_label",
-        pred_score_col="sentiment_score",
-        prefix="SnowNLP",
-    )
+        if roberta_origin_df is not None:
+            merged, _ = merge_predictions(
+                merged,
+                roberta_origin_df,
+                pred_label_col="sentiment_label",
+                pred_score_col="sentiment_score",
+                prefix="roBERTa_origin",
+                key_cols=key_cols,
+            )
 
-    if "roBERTa_label" not in merged.columns or "SnowNLP_label" not in merged.columns:
-        print("预测文件缺少 sentiment_label 列，无法评估")
-        return
+        if roberta_fit_df is not None:
+            merged, _ = merge_predictions(
+                merged,
+                roberta_fit_df,
+                pred_label_col="sentiment_label",
+                pred_score_col="sentiment_score",
+                prefix="roBERTa_fit",
+                key_cols=key_cols,
+            )
+        else:
+            merged["roBERTa_fit_label"] = ""
+            merged["roBERTa_fit_score"] = pd.NA
 
-    roberta_metrics = compute_binary_metrics(merged[truth_col], merged["roBERTa_label"])
-    baseline_metrics = compute_binary_metrics(merged[truth_col], merged["SnowNLP_label"])
+        merged, _ = merge_predictions(
+            merged,
+            baseline_df,
+            pred_label_col="sentiment_label",
+            pred_score_col="sentiment_score",
+            prefix="SnowNLP",
+            key_cols=key_cols,
+        )
 
-    generate_html_report(
-        merged_df=merged,
-        keys=keys,
-        truth_col=truth_col,
-        roberta_metrics=roberta_metrics,
-        baseline_metrics=baseline_metrics,
-        report_path=report_path,
-    )
+        if "roBERTa_label" not in merged.columns or "SnowNLP_label" not in merged.columns:
+            print(f"[{dataset}] 预测文件缺少 sentiment_label 列，无法评估")
+            return None
 
-    print(f"评估报告已生成: {report_path}")
+        roberta_metrics = compute_binary_metrics(merged[truth_col], merged["roBERTa_label"])
+        roberta_origin_metrics = (
+            compute_binary_metrics(merged[truth_col], merged["roBERTa_origin_label"])
+            if "roBERTa_origin_label" in merged.columns
+            else None
+        )
+        roberta_fit_metrics = compute_binary_metrics(merged[truth_col], merged.get("roBERTa_fit_label", ""))
+        baseline_metrics = compute_binary_metrics(merged[truth_col], merged["SnowNLP_label"])
+
+        os.makedirs(est_dir, exist_ok=True)
+        generate_html_report(
+            merged_df=merged,
+            keys=keys,
+            truth_col=truth_col,
+            roberta_metrics=roberta_metrics,
+            roberta_origin_metrics=roberta_origin_metrics,
+            roberta_fit_metrics=roberta_fit_metrics,
+            baseline_metrics=baseline_metrics,
+            report_path=report_path,
+        )
+        print(f"[{dataset}] 评估报告已生成: {report_path}")
+        return report_path
+
+    run_for_dataset("weibo", key_cols=["weibo_id", "user_name", "publish_time", "cleaned_text"])
+    run_for_dataset("zhihu", key_cols=["answer_id"])
 
 
 if __name__ == "__main__":

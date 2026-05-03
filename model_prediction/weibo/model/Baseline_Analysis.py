@@ -28,11 +28,12 @@ def choose_mode_interactively():
 
 def main():
     print("请先安装依赖: /usr/bin/python3 -m pip install --user snownlp")
-    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    model_dir = os.path.dirname(os.path.abspath(__file__))
+    project_dir = os.path.dirname(os.path.dirname(os.path.dirname(model_dir)))
     input_full = os.path.join(project_dir, "dataset", "weibo_comments_cleaned.csv")
-    input_sample = os.path.join(project_dir, "model_estimate", "sample_input.csv")
+    input_sample = os.path.join(project_dir, "model_estimate", "weibo", "sample_input.csv")
     output_full = os.path.join(project_dir, "model_prediction", "Baseline_prediction.csv")
-    output_sample = os.path.join(project_dir, "model_estimate", "Baseline_sample_prediction.csv")
+    output_sample = os.path.join(project_dir, "model_estimate", "weibo", "Baseline_sample_prediction.csv")
 
     if sys.stdin.isatty():
         mode = choose_mode_interactively()

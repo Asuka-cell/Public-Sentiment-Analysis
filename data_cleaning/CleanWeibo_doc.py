@@ -69,7 +69,7 @@ def clean_lines(text):
         if is_low_value_line(p):
             continue
         out.append(p)
-    return out
+    return out 
 
 
 def build_document(post, comments, max_comments, min_comment_len, max_doc_chars, post_repeat):
