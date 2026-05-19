@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -206,8 +208,7 @@ def choose_mode_interactively():
     return None
 
 
-def main():
-    parser = argparse.ArgumentParser()
+def main(input_path: str | None = None, output_dir: str | None = None, mode: str | None = None):
     model_dir = os.path.dirname(os.path.abspath(__file__))
     zhihu_dir = os.path.dirname(model_dir)
     project_dir = os.path.dirname(os.path.dirname(zhihu_dir))
@@ -216,27 +217,50 @@ def main():
     default_common = os.path.join(stop_dir, "common_stopwords.txt")
     default_event = os.path.join(stop_dir, "event_stopwords.txt")
 
-    parser.add_argument("--input", default=os.path.join(project_dir, "dataset", "zhihu_answers_cleaned.csv"))
-    parser.add_argument("--output_dir", default=os.path.join(zhihu_dir, "prediction", "bertopic_output"))
-    parser.add_argument("--embedding_model", default="shibing624/text2vec-base-chinese")
-    parser.add_argument("--min_topic_size", type=int, default=15)
-    parser.add_argument("--nr_topics", default=None)
-    parser.add_argument("--stopwords_common", default=default_common)
-    parser.add_argument("--stopwords_event", default=default_event)
-    parser.add_argument("--hf_endpoint", default="https://hf-mirror.com")
-    parser.add_argument("--cache_dir", default=None)
-    parser.add_argument("--local_files_only", action="store_true")
-    parser.add_argument("--device", default=None)
-    parser.add_argument("--keep_history", action="store_true")
-    args = parser.parse_args()
+    if input_path is None and output_dir is None and mode is None:
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--input", default=os.path.join(project_dir, "dataset", "zhihu_answers_cleaned.csv"))
+        parser.add_argument("--output_dir", default=os.path.join(zhihu_dir, "prediction", "bertopic_output"))
+        parser.add_argument("--embedding_model", default="shibing624/text2vec-base-chinese")
+        parser.add_argument("--min_topic_size", type=int, default=15)
+        parser.add_argument("--nr_topics", default=None)
+        parser.add_argument("--stopwords_common", default=default_common)
+        parser.add_argument("--stopwords_event", default=default_event)
+        parser.add_argument("--hf_endpoint", default="https://hf-mirror.com")
+        parser.add_argument("--cache_dir", default=None)
+        parser.add_argument("--local_files_only", action="store_true")
+        parser.add_argument("--device", default=None)
+        parser.add_argument("--keep_history", action="store_true")
+        args = parser.parse_args()
 
-    if sys.stdin.isatty():
-        mode = choose_mode_interactively()
+        if sys.stdin.isatty():
+            mode = choose_mode_interactively()
+        else:
+            mode = "sample"
+        if mode is None:
+            print("无效输入，程序结束。")
+            return
+
+        input_path = args.input
+        output_dir = args.output_dir
     else:
-        mode = "sample"
-    if mode is None:
-        print("无效输入，程序结束。")
-        return
+        class _Args:
+            pass
+
+        args = _Args()
+        args.embedding_model = "shibing624/text2vec-base-chinese"
+        args.min_topic_size = 15
+        args.nr_topics = None
+        args.stopwords_common = default_common
+        args.stopwords_event = default_event
+        args.hf_endpoint = "https://hf-mirror.com"
+        args.cache_dir = None
+        args.local_files_only = False
+        args.device = None
+        args.keep_history = False
+        mode = mode or "full"
+        input_path = input_path or os.path.join(project_dir, "dataset", "zhihu_answers_cleaned.csv")
+        output_dir = output_dir or os.path.join(zhihu_dir, "prediction", "bertopic_output")
 
     try:
         from bertopic import BERTopic
@@ -269,12 +293,12 @@ def main():
     if args.hf_endpoint and not os.environ.get("HF_ENDPOINT"):
         os.environ["HF_ENDPOINT"] = args.hf_endpoint
 
-    input_path = os.path.join(estimate_dir, "sample_input.csv") if mode == "sample" else args.input
+    input_path = os.path.join(estimate_dir, "sample_input.csv") if mode == "sample" else input_path
     if not os.path.exists(input_path):
         print(f"输入文件不存在: {input_path}")
         return
 
-    output_dir = args.output_dir if mode == "full" else f"{args.output_dir}_sample"
+    output_dir = output_dir if mode == "full" else f"{output_dir}_sample"
     ensure_dir(output_dir)
     if not args.keep_history:
         clear_output_dir(output_dir)
@@ -365,8 +389,6 @@ def main():
     topics, probs = topic_model.fit_transform(docs)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_dir_out = os.path.join(output_dir, f"bertopic_model_{ts}") if args.keep_history else os.path.join(output_dir, "bertopic_model")
-    topic_model.save(model_dir_out, serialization="pickle", save_embedding_model=True)
 
     topic_info_path = os.path.join(output_dir, f"topic_info_{ts}.csv") if args.keep_history else os.path.join(output_dir, "topic_info.csv")
     topic_model.get_topic_info().to_csv(topic_info_path, index=False, encoding="utf-8-sig")
@@ -473,7 +495,6 @@ def main():
     with open(aspect_map_path, "w", encoding="utf-8") as f:
         json.dump(topic_aspect_map, f, ensure_ascii=False, indent=2)
 
-    print(f"模型目录: {model_dir_out}")
     print(f"主题概览: {topic_info_path}")
     print(f"文档主题: {doc_topics_path}")
     print(f"主题词表: {topics_path}")

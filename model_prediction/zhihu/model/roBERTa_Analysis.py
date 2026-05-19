@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import glob
 import os
 import sys
@@ -211,7 +213,7 @@ def predict_p_pos(tokenizer, model, device, text, pos_label_id):
     return _pool_probs(probs, pool_mode)
 
 
-def main():
+def main(input_file: str | None = None, output_path: str | None = None, mode: str | None = None):
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
     model_dir = os.path.dirname(os.path.abspath(__file__))
@@ -223,26 +225,34 @@ def main():
     output_full = os.path.join(zhihu_dir, "prediction", "roBERTa_prediction.csv")
     output_sample = os.path.join(estimate_dir, "roBERTa_sample_prediction.csv")
 
-    if sys.stdin.isatty():
-        mode = choose_mode_interactively()
-    else:
-        mode = "sample"
-    if mode is None:
-        print("无效输入，程序结束。")
-        return
-
-    if mode == "sample":
-        if not os.path.exists(input_sample):
-            print(f"输入文件不存在: {input_sample}")
+    if input_file or output_path:
+        input_file = input_file or input_full
+        output_path = output_path or output_full
+        if not os.path.exists(input_file):
+            print(f"输入文件不存在: {input_file}")
             return
-        df = load_csv(input_sample)
-        output_path = output_sample
+        df = load_csv(input_file)
     else:
-        if not os.path.exists(input_full):
-            print(f"输入文件不存在: {input_full}")
+        if mode is None:
+            if sys.stdin.isatty():
+                mode = choose_mode_interactively()
+            else:
+                mode = "sample"
+        if mode is None:
+            print("无效输入，程序结束。")
             return
-        df = load_csv(input_full)
-        output_path = output_full
+        if mode == "sample":
+            if not os.path.exists(input_sample):
+                print(f"输入文件不存在: {input_sample}")
+                return
+            df = load_csv(input_sample)
+            output_path = output_sample
+        else:
+            if not os.path.exists(input_full):
+                print(f"输入文件不存在: {input_full}")
+                return
+            df = load_csv(input_full)
+            output_path = output_full
 
     text_col = "content" if "content" in df.columns else ("cleaned_text" if "cleaned_text" in df.columns else "text")
     if text_col not in df.columns:

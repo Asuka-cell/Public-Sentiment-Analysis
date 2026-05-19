@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import glob
 import json
 import os
@@ -189,7 +191,7 @@ def _predict_pos_probs(model, tokenizer, texts, device, max_length: int, batch_s
     return out
 
 
-def main():
+def main(input_file: str | None = None, output_file: str | None = None, mode: str | None = None):
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
     model_dir = os.path.dirname(os.path.abspath(__file__))
@@ -205,16 +207,20 @@ def main():
     output_full = os.path.join(prediction_dir, "roBERTa_fit_prediction.csv")
     output_sample = os.path.join(estimate_dir, "roBERTa_fit_sample_prediction.csv")
 
-    if sys.stdin.isatty():
-        mode = choose_mode_interactively()
+    if input_file or output_file:
+        input_file = input_file or input_full
+        output_file = output_file or output_full
     else:
-        mode = "sample"
-    if mode is None:
-        print("无效输入，程序结束。")
-        return
-
-    input_file = input_sample if mode == "sample" else input_full
-    output_file = output_sample if mode == "sample" else output_full
+        if mode is None:
+            if sys.stdin.isatty():
+                mode = choose_mode_interactively()
+            else:
+                mode = "sample"
+        if mode is None:
+            print("无效输入，程序结束。")
+            return
+        input_file = input_sample if mode == "sample" else input_full
+        output_file = output_sample if mode == "sample" else output_full
 
     if not os.path.exists(input_file):
         print(f"输入文件不存在: {input_file}")

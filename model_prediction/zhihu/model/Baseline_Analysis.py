@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import sys
 
@@ -27,7 +29,7 @@ def choose_mode_interactively():
     return None
 
 
-def main():
+def main(input_file: str | None = None, output_file: str | None = None, mode: str | None = None):
     model_dir = os.path.dirname(os.path.abspath(__file__))
     zhihu_dir = os.path.dirname(model_dir)
     project_dir = os.path.dirname(os.path.dirname(zhihu_dir))
@@ -37,27 +39,35 @@ def main():
     output_full = os.path.join(zhihu_dir, "prediction", "Baseline_prediction.csv")
     output_sample = os.path.join(estimate_dir, "Baseline_sample_prediction.csv")
 
-    if sys.stdin.isatty():
-        mode = choose_mode_interactively()
-    else:
-        mode = "sample"
-    if mode is None:
-        print("无效输入，程序结束。")
-        return
-
     try:
-        if mode == "sample":
-            if not os.path.exists(input_sample):
-                print(f"输入文件不存在: {input_sample}")
+        if input_file or output_file:
+            input_file = input_file or input_full
+            output_file = output_file or output_full
+            if not os.path.exists(input_file):
+                print(f"输入文件不存在: {input_file}")
                 return
-            df = load_csv(input_sample)
-            output_file = output_sample
+            df = load_csv(input_file)
         else:
-            if not os.path.exists(input_full):
-                print(f"输入文件不存在: {input_full}")
+            if mode is None:
+                if sys.stdin.isatty():
+                    mode = choose_mode_interactively()
+                else:
+                    mode = "sample"
+            if mode is None:
+                print("无效输入，程序结束。")
                 return
-            df = load_csv(input_full)
-            output_file = output_full
+            if mode == "sample":
+                if not os.path.exists(input_sample):
+                    print(f"输入文件不存在: {input_sample}")
+                    return
+                df = load_csv(input_sample)
+                output_file = output_sample
+            else:
+                if not os.path.exists(input_full):
+                    print(f"输入文件不存在: {input_full}")
+                    return
+                df = load_csv(input_full)
+                output_file = output_full
     except Exception as e:
         print(f"读取CSV失败: {e}")
         return

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -200,30 +202,51 @@ def clear_output_dir(output_dir):
                 pass
 
 
-def main():
-    parser = argparse.ArgumentParser()
+def main(input_path: str | None = None, output_dir: str | None = None):
     project_root = os.path.abspath(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")
     )
-    parser.add_argument(
-        "--input",
-        default=os.path.join(project_root, "dataset", "weibo_doc_cleaned.jsonl"),
-    )
-    parser.add_argument(
-        "--output_dir",
-        default=os.path.join(project_root, "model_prediction", "weibo", "prediction", "bertopic_output"),
-    )
-    parser.add_argument("--embedding_model", default="shibing624/text2vec-base-chinese")
-    parser.add_argument("--min_topic_size", type=int, default=15)
-    parser.add_argument("--nr_topics", default=None)
-    parser.add_argument("--stopwords_common", default=DEFAULT_COMMON_STOPWORDS_PATH)
-    parser.add_argument("--stopwords_event", default=DEFAULT_EVENT_STOPWORDS_PATH)
-    parser.add_argument("--hf_endpoint", default="https://hf-mirror.com")
-    parser.add_argument("--cache_dir", default=None)
-    parser.add_argument("--local_files_only", action="store_true")
-    parser.add_argument("--device", default=None)
-    parser.add_argument("--keep_history", action="store_true")
-    args = parser.parse_args()
+
+    if input_path is None and output_dir is None:
+        parser = argparse.ArgumentParser()
+        parser.add_argument(
+            "--input",
+            default=os.path.join(project_root, "dataset", "weibo_doc_cleaned.jsonl"),
+        )
+        parser.add_argument(
+            "--output_dir",
+            default=os.path.join(project_root, "model_prediction", "weibo", "prediction", "bertopic_output"),
+        )
+        parser.add_argument("--embedding_model", default="shibing624/text2vec-base-chinese")
+        parser.add_argument("--min_topic_size", type=int, default=15)
+        parser.add_argument("--nr_topics", default=None)
+        parser.add_argument("--stopwords_common", default=DEFAULT_COMMON_STOPWORDS_PATH)
+        parser.add_argument("--stopwords_event", default=DEFAULT_EVENT_STOPWORDS_PATH)
+        parser.add_argument("--hf_endpoint", default="https://hf-mirror.com")
+        parser.add_argument("--cache_dir", default=None)
+        parser.add_argument("--local_files_only", action="store_true")
+        parser.add_argument("--device", default=None)
+        parser.add_argument("--keep_history", action="store_true")
+        args = parser.parse_args()
+        input_path = args.input
+        output_dir = args.output_dir
+    else:
+        class _Args:
+            pass
+
+        args = _Args()
+        input_path = input_path or os.path.join(project_root, "dataset", "weibo_doc_cleaned.jsonl")
+        output_dir = output_dir or os.path.join(project_root, "model_prediction", "weibo", "prediction", "bertopic_output")
+        args.embedding_model = "shibing624/text2vec-base-chinese"
+        args.min_topic_size = 15
+        args.nr_topics = None
+        args.stopwords_common = DEFAULT_COMMON_STOPWORDS_PATH
+        args.stopwords_event = DEFAULT_EVENT_STOPWORDS_PATH
+        args.hf_endpoint = "https://hf-mirror.com"
+        args.cache_dir = None
+        args.local_files_only = False
+        args.device = None
+        args.keep_history = False
 
     try:
         from bertopic import BERTopic
@@ -253,8 +276,6 @@ def main():
         print("请安装: /usr/bin/python3 -m pip install --user scikit-learn")
         return
 
-    input_path = args.input
-    output_dir = args.output_dir
     ensure_dir(output_dir)
     if not args.keep_history:
         clear_output_dir(output_dir)
@@ -346,8 +367,6 @@ def main():
     topics, probs = topic_model.fit_transform(docs)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_dir = os.path.join(output_dir, f"bertopic_model_{ts}") if args.keep_history else os.path.join(output_dir, "bertopic_model")
-    topic_model.save(model_dir, serialization="pickle", save_embedding_model=True)
 
     topic_info_path = os.path.join(output_dir, f"topic_info_{ts}.csv") if args.keep_history else os.path.join(output_dir, "topic_info.csv")
     topic_model.get_topic_info().to_csv(topic_info_path, index=False, encoding="utf-8-sig")
@@ -463,7 +482,6 @@ def main():
     with open(aspect_map_path, "w", encoding="utf-8") as f:
         json.dump(topic_aspect_map, f, ensure_ascii=False, indent=2)
 
-    print(f"模型目录: {model_dir}")
     print(f"主题概览: {topic_info_path}")
     print(f"文档主题: {doc_topics_path}")
     print(f"主题词表: {topics_path}")

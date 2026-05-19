@@ -36,15 +36,23 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-page = st.sidebar.radio("页面", ["可视化大屏", "模型评估报告", "样本标注", "数据采集"])
+page = st.sidebar.radio(
+    "页面",
+    [
+        "舆情分析数据采集",
+        "舆情分析可视化大屏",
+        "抽样样本标注",
+        "情感分析模型评估报告",
+    ],
+)
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 
-if page == "可视化大屏":
+if page == "舆情分析可视化大屏":
     render_dashboard(base_dir=base_dir)
-elif page == "模型评估报告":
+elif page == "情感分析模型评估报告":
     render_model_report(base_dir=base_dir)
-elif page == "样本标注":
+elif page == "抽样样本标注":
     render_labeling(base_dir=base_dir)
 else:
     render_data_collection(base_dir=base_dir)

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import glob
 import json
 import os
@@ -137,7 +139,7 @@ def get_preferred_device():
     return -1
 
 
-def main():
+def main(input_file: str | None = None, output_file: str | None = None, mode: str | None = None):
     os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
     model_dir = os.path.dirname(os.path.abspath(__file__))
@@ -148,20 +150,24 @@ def main():
     output_full = os.path.join(project_dir, "model_prediction", "roBERTa_prediction.csv")
     output_sample = os.path.join(project_dir, "model_estimate", "weibo", "roBERTa_sample_prediction.csv")
 
-    if sys.stdin.isatty():
-        mode = choose_mode_interactively()
+    if input_file or output_file:
+        input_file = input_file or input_full
+        output_file = output_file or output_full
     else:
-        mode = "sample"
-    if mode is None:
-        print("无效输入，程序结束。")
-        return
-
-    if mode == "sample":
-        input_file = input_sample
-        output_file = output_sample
-    else:
-        input_file = input_full
-        output_file = output_full
+        if mode is None:
+            if sys.stdin.isatty():
+                mode = choose_mode_interactively()
+            else:
+                mode = "sample"
+        if mode is None:
+            print("无效输入，程序结束。")
+            return
+        if mode == "sample":
+            input_file = input_sample
+            output_file = output_sample
+        else:
+            input_file = input_full
+            output_file = output_full
 
     print("正在读取清洗后的数据...")
     try:

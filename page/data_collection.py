@@ -1,4 +1,7 @@
+import csv
+import importlib.util
 import os
+import shutil
 import subprocess
 import time
 import select
@@ -127,6 +130,152 @@ def _file_info(path: str) -> str:
         return "存在"
 
 
+def _read_csv_columns(path: str):
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8-sig", errors="ignore", newline="") as f:
+            reader = csv.reader(f)
+            row = next(reader, None)
+        if not row:
+            return []
+        return [str(x).strip() for x in row if str(x).strip()]
+    except Exception:
+        return []
+
+
+_MODULE_CACHE = {}
+
+
+def _load_module(module_key: str, file_path: str):
+    m = _MODULE_CACHE.get(module_key)
+    if m is not None:
+        return m
+    spec = importlib.util.spec_from_file_location(module_key, file_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"无法加载模块: {file_path}")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    _MODULE_CACHE[module_key] = m
+    return m
+
+
+def _ensure_parent_dir(path: str) -> None:
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+
+
+def _copy_if_exists(src: str, dst: str) -> bool:
+    if not os.path.exists(src):
+        return False
+    if os.path.isdir(dst):
+        shutil.rmtree(dst, ignore_errors=True)
+    _ensure_parent_dir(dst)
+    shutil.copyfile(src, dst)
+    return True
+
+
+def _run_import_predictions(
+    project_dir: str,
+    platform: str,
+    weibo_comments_import_path: str,
+    zhihu_answers_import_path: str,
+    weibo_doc_import_path: str,
+) -> None:
+    pred_root = os.path.join(project_dir, "model_prediction")
+    if platform == "微博":
+        pred_dir = os.path.join(pred_root, "weibo", "prediction")
+        os.makedirs(pred_dir, exist_ok=True)
+
+        bertopic_out_dir = os.path.join(pred_dir, "bertopic_output_import.csv")
+        os.makedirs(bertopic_out_dir, exist_ok=True)
+        bert_out_legacy = os.path.join(pred_dir, "BERT_prediction_import.csv")
+        baseline_out = os.path.join(pred_dir, "Baseline_prediction_import.csv")
+        roberta_fit_out = os.path.join(pred_dir, "roBERTa_fit_prediction_import.csv")
+        roberta_origin_out = os.path.join(pred_dir, "roBERTa_origin_prediction_import.csv")
+        roberta_out = os.path.join(pred_dir, "roBERTa_prediction_import.csv")
+
+        with st.spinner("正在进行主题聚类（BERTopic）..."):
+            bert_mod = _load_module(
+                "__dc_weibo_bertopic__",
+                os.path.join(pred_root, "weibo", "model", "BERTopic_Analysis.py"),
+            )
+            bert_mod.main(input_path=weibo_doc_import_path, output_dir=bertopic_out_dir)
+
+        with st.spinner("正在进行情感分析（Baseline）..."):
+            m = _load_module(
+                "__dc_weibo_baseline__",
+                os.path.join(pred_root, "weibo", "model", "Baseline_Analysis.py"),
+            )
+            m.main(input_file=weibo_comments_import_path, output_file=baseline_out)
+
+        with st.spinner("正在进行情感分析（roBERTa Fine-tuned）..."):
+            m = _load_module(
+                "__dc_weibo_roberta_fit__",
+                os.path.join(pred_root, "weibo", "model", "roBERTa_fit_Analysis.py"),
+            )
+            m.main(input_file=weibo_comments_import_path, output_file=roberta_fit_out)
+
+        with st.spinner("正在进行情感分析（roBERTa Origin）..."):
+            m = _load_module(
+                "__dc_weibo_roberta_origin__",
+                os.path.join(pred_root, "weibo", "model", "roBERTa_origin_Analysis.py"),
+            )
+            m.main(input_file=weibo_comments_import_path, output_file=roberta_origin_out)
+
+        with st.spinner("正在进行情感分析（roBERTa）..."):
+            m = _load_module(
+                "__dc_weibo_roberta__",
+                os.path.join(pred_root, "weibo", "model", "roBERTa_Analysis.py"),
+            )
+            m.main(input_file=weibo_comments_import_path, output_file=roberta_out)
+
+        if os.path.exists(bert_out_legacy) and not os.path.isdir(bert_out_legacy):
+            try:
+                os.remove(bert_out_legacy)
+            except Exception:
+                pass
+        return
+
+    pred_dir = os.path.join(pred_root, "zhihu", "prediction")
+    os.makedirs(pred_dir, exist_ok=True)
+
+    bertopic_out_dir = os.path.join(pred_dir, "bertopic_output_import.csv")
+    os.makedirs(bertopic_out_dir, exist_ok=True)
+    baseline_out = os.path.join(pred_dir, "Baseline_prediction_import.csv")
+    roberta_fit_out = os.path.join(pred_dir, "roBERTa_fit_prediction_import.csv")
+    roberta_out = os.path.join(pred_dir, "roBERTa_prediction_import.csv")
+
+    with st.spinner("正在进行主题聚类（BERTopic）..."):
+        bert_mod = _load_module(
+            "__dc_zhihu_bertopic__",
+            os.path.join(pred_root, "zhihu", "model", "BERTopic_Analysis.py"),
+        )
+        bert_mod.main(input_path=zhihu_answers_import_path, output_dir=bertopic_out_dir, mode="full")
+
+    with st.spinner("正在进行情感分析（Baseline）..."):
+        m = _load_module(
+            "__dc_zhihu_baseline__",
+            os.path.join(pred_root, "zhihu", "model", "Baseline_Analysis.py"),
+        )
+        m.main(input_file=zhihu_answers_import_path, output_file=baseline_out)
+
+    with st.spinner("正在进行情感分析（roBERTa Fine-tuned）..."):
+        m = _load_module(
+            "__dc_zhihu_roberta_fit__",
+            os.path.join(pred_root, "zhihu", "model", "roBERTa_fit_Analysis.py"),
+        )
+        m.main(input_file=zhihu_answers_import_path, output_file=roberta_fit_out)
+
+    with st.spinner("正在进行情感分析（roBERTa）..."):
+        m = _load_module(
+            "__dc_zhihu_roberta__",
+            os.path.join(pred_root, "zhihu", "model", "roBERTa_Analysis.py"),
+        )
+        m.main(input_file=zhihu_answers_import_path, output_path=roberta_out)
+
+
 def render_data_collection(base_dir: str) -> None:
     st.title("🕸️ 数据采集")
 
@@ -134,6 +283,168 @@ def render_data_collection(base_dir: str) -> None:
     weibo_dir = os.path.join(project_dir, "get_weibo_data")
     zhihu_dir = os.path.join(project_dir, "get_zhihu_data")
     dataset_dir = os.path.join(project_dir, "dataset")
+    os.makedirs(dataset_dir, exist_ok=True)
+
+    weibo_posts_import_path = os.path.join(dataset_dir, "weibo_posts_import.csv")
+    weibo_comments_import_path = os.path.join(dataset_dir, "weibo_comments_import.csv")
+    zhihu_questions_import_path = os.path.join(dataset_dir, "zhihu_questions_import.csv")
+    zhihu_answers_import_path = os.path.join(dataset_dir, "zhihu_answers_import.csv")
+    weibo_doc_import_path = os.path.join(dataset_dir, "weibo_doc_import.jsonl")
+
+    with st.expander("📥 导入本地数据（仅支持 CSV）", expanded=True):
+        import_platform = st.selectbox("导入平台", options=["知乎", "微博"], index=0)
+
+        schema_toggle_key = "__dc_import_schema_open"
+        if st.button("导入列规范", use_container_width=True, key="__dc_import_schema_btn"):
+            st.session_state[schema_toggle_key] = not bool(st.session_state.get(schema_toggle_key))
+
+        if st.session_state.get(schema_toggle_key):
+            weibo_posts_ref = os.path.join(dataset_dir, "weibo_posts.csv")
+            weibo_comments_ref = os.path.join(dataset_dir, "weibo_comments.csv")
+            zhihu_questions_ref = os.path.join(dataset_dir, "zhihu_questions.csv")
+            zhihu_answers_ref = os.path.join(dataset_dir, "zhihu_answers.csv")
+
+            st.subheader("微博博文（weibo_posts.csv）")
+            cols = _read_csv_columns(weibo_posts_ref)
+            st.code(",".join(cols) if cols else "未读取到列名", language="text")
+
+            st.subheader("微博评论（weibo_comments.csv）")
+            cols = _read_csv_columns(weibo_comments_ref)
+            st.code(",".join(cols) if cols else "未读取到列名", language="text")
+
+            st.subheader("知乎问题（zhihu_questions.csv）")
+            cols = _read_csv_columns(zhihu_questions_ref)
+            st.code(",".join(cols) if cols else "未读取到列名", language="text")
+
+            st.subheader("知乎回答（zhihu_answers.csv）")
+            cols = _read_csv_columns(zhihu_answers_ref)
+            st.code(",".join(cols) if cols else "未读取到列名", language="text")
+
+        if import_platform == "微博":
+            uploaded_posts = st.file_uploader(
+                "选择博文 CSV",
+                type=["csv"],
+                accept_multiple_files=False,
+                key="__dc_import_weibo_posts",
+            )
+            uploaded_comments = st.file_uploader(
+                "选择评论 CSV",
+                type=["csv"],
+                accept_multiple_files=False,
+                key="__dc_import_weibo_comments",
+            )
+        else:
+            uploaded_questions = st.file_uploader(
+                "选择问题 CSV",
+                type=["csv"],
+                accept_multiple_files=False,
+                key="__dc_import_zhihu_questions",
+            )
+            uploaded_answers = st.file_uploader(
+                "选择回答 CSV",
+                type=["csv"],
+                accept_multiple_files=False,
+                key="__dc_import_zhihu_answers",
+            )
+
+        if st.button("开始导入", use_container_width=True):
+            proceed = True
+            if import_platform == "微博":
+                if uploaded_posts is None or uploaded_comments is None:
+                    st.error("请同时选择博文 CSV 和评论 CSV")
+                    proceed = False
+            else:
+                if uploaded_questions is None or uploaded_answers is None:
+                    st.error("请同时选择问题 CSV 和回答 CSV")
+                    proceed = False
+
+            if proceed:
+                try:
+                    if import_platform == "微博":
+                        with open(weibo_posts_import_path, "wb") as f:
+                            f.write(uploaded_posts.getbuffer())
+                        with open(weibo_comments_import_path, "wb") as f:
+                            f.write(uploaded_comments.getbuffer())
+                    else:
+                        with open(zhihu_questions_import_path, "wb") as f:
+                            f.write(uploaded_questions.getbuffer())
+                        with open(zhihu_answers_import_path, "wb") as f:
+                            f.write(uploaded_answers.getbuffer())
+                except Exception as e:
+                    st.error(f"导入失败：{e}")
+                    proceed = False
+
+            if proceed:
+                try:
+                    cleaning_dir = os.path.join(project_dir, "data_cleaning")
+                    if import_platform == "微博":
+                        with st.spinner("正在清洗数据..."):
+                            clean_posts = _load_module(
+                                "__dc_clean_weibo_posts__",
+                                os.path.join(cleaning_dir, "CleanWeibo_posts.py"),
+                            )
+                            clean_comments = _load_module(
+                                "__dc_clean_weibo_comments__",
+                                os.path.join(cleaning_dir, "CleanWeibo_comments.py"),
+                            )
+                            clean_posts.main(
+                                input_file=weibo_posts_import_path,
+                                output_file=weibo_posts_import_path,
+                            )
+                            clean_comments.main(
+                                input_file=weibo_comments_import_path,
+                                output_file=weibo_comments_import_path,
+                            )
+
+                        with st.spinner("正在生成微博 doc..."):
+                            doc_mod = _load_module(
+                                "__dc_weibo_doc__",
+                                os.path.join(project_dir, "get_weibo_data", "GetWeiboDoc.py"),
+                            )
+                            doc_mod.main(
+                                posts_path=weibo_posts_import_path,
+                                comments_path=weibo_comments_import_path,
+                                output_path=weibo_doc_import_path,
+                            )
+
+                        with st.spinner("正在清洗微博 doc..."):
+                            clean_doc = _load_module(
+                                "__dc_clean_weibo_doc__",
+                                os.path.join(cleaning_dir, "CleanWeibo_doc.py"),
+                            )
+                            clean_doc.main(
+                                input_path=weibo_doc_import_path,
+                                output_path=weibo_doc_import_path,
+                            )
+
+                    else:
+                        with st.spinner("正在清洗数据..."):
+                            clean_zhihu = _load_module(
+                                "__dc_clean_zhihu_qa__",
+                                os.path.join(cleaning_dir, "CleanZhihu_qa.py"),
+                            )
+                            clean_zhihu.main(
+                                questions_in=zhihu_questions_import_path,
+                                answers_in=zhihu_answers_import_path,
+                                questions_out=zhihu_questions_import_path,
+                                answers_out=zhihu_answers_import_path,
+                            )
+
+                    with st.spinner("正在进行导入数据预测..."):
+                        _run_import_predictions(
+                            project_dir=project_dir,
+                            platform=import_platform,
+                            weibo_comments_import_path=weibo_comments_import_path,
+                            zhihu_answers_import_path=zhihu_answers_import_path,
+                            weibo_doc_import_path=weibo_doc_import_path,
+                        )
+                except Exception as e:
+                    st.error(f"处理失败：{e}")
+                    proceed = False
+
+            if proceed:
+                st.success("导入并处理完成")
+                st.rerun()
 
     tab_weibo, tab_zhihu = st.tabs(["微博", "知乎"])
 

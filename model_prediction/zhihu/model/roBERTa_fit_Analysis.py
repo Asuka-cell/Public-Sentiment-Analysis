@@ -1,24 +1,14 @@
-import glob
+from __future__ import annotations
+
 import json
 import os
+import re
 import sys
 from typing import Optional, Tuple
 
 import pandas as pd
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
-ASPECT_PRIORS = {
-    "食品安全与卫生": 0.30,
-    "预制菜与食材": 0.40,
-    "价格与性价比": 0.40,
-    "服务与体验": 0.45,
-    "口味与品质": 0.45,
-    "营销与公关": 0.45,
-    "企业责任与诚信": 0.55,
-    "用工与合规": 0.45,
-    "其他": 0.50,
-}
 
 
 def load_csv(path: str) -> pd.DataFrame:
@@ -36,68 +26,6 @@ def choose_mode_interactively() -> Optional[str]:
     if s == "2":
         return "full"
     return None
-
-
-def load_latest_doc_topics(model_dir: str) -> Optional[pd.DataFrame]:
-    candidates = []
-    output_dir_a = os.path.join(os.path.dirname(model_dir), "prediction", "bertopic_output")
-    output_dir_a2 = os.path.join(os.path.dirname(model_dir), "prediction", "bertopic_output_sample")
-    output_dir_b = os.path.join(model_dir, "bertopic_output")
-    for output_dir in [output_dir_a, output_dir_a2, output_dir_b]:
-        candidates.extend(glob.glob(os.path.join(output_dir, "doc_topics.csv")))
-    if not candidates:
-        return None
-    latest_path = max(candidates, key=lambda p: os.path.getmtime(p))
-    df = load_csv(latest_path)
-    if "answer_id" not in df.columns:
-        return None
-    keep_cols = ["answer_id"]
-    for c in ["topic", "probability", "aspect"]:
-        if c in df.columns:
-            keep_cols.append(c)
-    df = df[keep_cols].copy()
-    df["answer_id"] = df["answer_id"].fillna("").astype(str).str.strip()
-    return df
-
-
-def combine_comment_with_aspect(comment_score, aspect, aspect_prob, text):
-    try:
-        s = float(comment_score)
-    except Exception:
-        s = 0.5
-    if s != s:
-        s = 0.5
-    s = max(0.0, min(1.0, s))
-
-    asp = str(aspect).strip() if aspect is not None else ""
-    base_aspect_score = ASPECT_PRIORS.get(asp, ASPECT_PRIORS["其他"])
-    try:
-        tp = float(aspect_prob)
-    except Exception:
-        tp = 0.0
-    if tp != tp:
-        tp = 0.0
-    tp = max(0.0, min(1.0, tp))
-    aspect_score = 0.5 + tp * (base_aspect_score - 0.5)
-
-    conf = abs(s - 0.5) * 2.0
-    comment_weight = 0.4 + 0.4 * max(0.0, min(1.0, conf))
-    topic_weight = 1.0 - comment_weight
-
-    t = "" if text is None else str(text)
-    t = t.lower()
-    strong_neg = ("很烂" in t) or ("太烂" in t) or ("垃圾" in t) or ("恶心" in t) or ("骗子" in t) or ("骗" in t)
-    strong_pos = ("yyds" in t) or ("太棒" in t) or ("真棒" in t) or ("真香" in t) or ("好吃" in t)
-    if strong_neg or strong_pos:
-        topic_weight = min(topic_weight, 0.15)
-    else:
-        topic_weight = min(topic_weight, 0.35)
-    comment_weight = 1.0 - topic_weight
-
-    final_score = comment_weight * s + topic_weight * aspect_score
-    final_score = max(0.0, min(1.0, final_score))
-    label = "积极" if final_score >= 0.5 else "消极"
-    return label, final_score
 
 
 def get_preferred_device():
@@ -238,49 +166,264 @@ def _pool_probs(probs, mode: str):
     return float(sum(w * p for w, p in zip(weights, ps)) / s)
 
 
+def _split_to_segments(text: str):
+    t = "" if text is None else str(text)
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    t = re.sub(r"\n{3,}", "\n\n", t).strip()
+    if not t:
+        return []
+
+    paras = [p.strip() for p in t.split("\n\n") if p.strip()]
+    segs = []
+    for p in paras:
+        if len(p) <= 220:
+            segs.append(p)
+            continue
+        parts = re.split(r"(?<=[。！？!?；;])\s*", p)
+        parts = [x.strip() for x in parts if x and x.strip()]
+        if not parts:
+            segs.append(p)
+            continue
+        cur = ""
+        for s in parts:
+            if not cur:
+                cur = s
+                continue
+            if len(cur) + len(s) <= 260:
+                cur = cur + s
+            else:
+                segs.append(cur)
+                cur = s
+        if cur:
+            segs.append(cur)
+
+    uniq = []
+    seen = set()
+    for s in segs:
+        s2 = s.strip()
+        if not s2:
+            continue
+        key = s2[:200]
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(s2)
+    return uniq
+
+
+def _load_question_lookup(dataset_dir: str):
+    q_path = os.path.join(dataset_dir, "zhihu_questions_cleaned.csv")
+    if not os.path.exists(q_path):
+        return {}
+    try:
+        qdf = pd.read_csv(q_path, encoding="utf-8-sig")
+    except Exception:
+        try:
+            qdf = pd.read_csv(q_path)
+        except Exception:
+            return {}
+    if qdf.empty or "question_id" not in qdf.columns:
+        return {}
+    qdf = qdf.copy()
+    qdf["question_id"] = qdf["question_id"].fillna("").astype(str).str.strip()
+    title_col = "title" if "title" in qdf.columns else None
+    excerpt_col = "excerpt" if "excerpt" in qdf.columns else None
+    out = {}
+    for _, r in qdf.iterrows():
+        qid = str(r.get("question_id", "")).strip()
+        if not qid:
+            continue
+        title = str(r.get(title_col, "")).strip() if title_col else ""
+        excerpt = str(r.get(excerpt_col, "")).strip() if excerpt_col else ""
+        if title and excerpt:
+            out[qid] = f"{title}\n\n{excerpt}"
+        elif title:
+            out[qid] = title
+        elif excerpt:
+            out[qid] = excerpt
+    return out
+
+
+def _build_context_texts(df: pd.DataFrame, text_col: str, dataset_dir: str):
+    q_lookup = _load_question_lookup(dataset_dir)
+    texts = df[text_col].fillna("").astype(str).tolist()
+    if not q_lookup:
+        return texts
+    if "question_id" not in df.columns:
+        return texts
+    qids = df["question_id"].fillna("").astype(str).str.strip().tolist()
+    out = []
+    for qid, ans in zip(qids, texts):
+        qtxt = q_lookup.get(str(qid).strip(), "")
+        if qtxt:
+            out.append(f"问题：{qtxt}\n\n回答：{ans}")
+        else:
+            out.append(ans)
+    return out
+
+
 def _predict_pos_probs_longtexts(model, tokenizer, texts, device, max_length: int, batch_size: int, pos_label_id: int):
     try:
-        overlap = int(os.environ.get("LONGTEXT_OVERLAP", "128"))
+        overlap = int(os.environ.get("LONGTEXT_OVERLAP", "64"))
     except Exception:
-        overlap = 128
-    pool_mode = os.environ.get("LONGTEXT_POOLING", "weighted")
+        overlap = 64
+    try:
+        top_k = int(os.environ.get("LONGTEXT_TOPK", "3"))
+    except Exception:
+        top_k = 3
+    top_k = max(1, min(10, int(top_k)))
 
-    chunk_texts = []
-    owner = []
-    for i, t in enumerate(texts):
-        chunks = _split_text_to_chunks(tokenizer, t, max_length=max_length, overlap=overlap)
-        if not chunks:
-            chunk_texts.append("")
-            owner.append(i)
-            continue
-        for c in chunks:
-            chunk_texts.append(c)
-            owner.append(i)
+    seg_pool_mode = os.environ.get("LONGTEXT_SEG_POOL", "max")
+    doc_rank_mode = os.environ.get("LONGTEXT_DOC_RANK", "positive")
+    doc_pool_mode = os.environ.get("LONGTEXT_DOC_POOL", "mean")
 
-    probs_chunks = _predict_pos_probs(
+    all_chunks = []
+    chunk_owner_doc = []
+    chunk_owner_seg = []
+    seg_counts = []
+    for di, t in enumerate(texts):
+        segs = _split_to_segments(t)
+        if not segs:
+            segs = [""]
+        seg_counts.append(len(segs))
+        for si, seg in enumerate(segs):
+            chunks = _split_text_to_chunks(tokenizer, seg, max_length=max_length, overlap=overlap)
+            if not chunks:
+                chunks = [""]
+            for c in chunks:
+                all_chunks.append(c)
+                chunk_owner_doc.append(di)
+                chunk_owner_seg.append(si)
+
+    probs = _predict_pos_probs(
         model=model,
         tokenizer=tokenizer,
-        texts=chunk_texts,
+        texts=all_chunks,
         device=device,
         max_length=max_length,
         batch_size=batch_size,
         pos_label_id=pos_label_id,
     )
 
-    buckets = [[] for _ in range(len(texts))]
-    for p, i in zip(probs_chunks, owner):
-        try:
-            buckets[int(i)].append(float(p))
-        except Exception:
-            continue
+    doc_seg_probs = []
+    for _ in range(len(texts)):
+        doc_seg_probs.append([])
+    seg_bucket = {}
+    for p, di, si in zip(probs, chunk_owner_doc, chunk_owner_seg):
+        key = (int(di), int(si))
+        seg_bucket.setdefault(key, []).append(float(p))
+
+    for di, nseg in enumerate(seg_counts):
+        seg_probs = []
+        for si in range(int(nseg)):
+            ps = seg_bucket.get((int(di), int(si)), [])
+            seg_probs.append(_pool_probs(ps, seg_pool_mode))
+        doc_seg_probs[int(di)] = seg_probs
 
     out = []
-    for b in buckets:
-        out.append(_pool_probs(b, pool_mode))
+    for seg_probs in doc_seg_probs:
+        if not seg_probs:
+            out.append(0.5)
+            continue
+        rm = (doc_rank_mode or "").strip().lower()
+        if rm == "confidence":
+            ranked = sorted(seg_probs, key=lambda x: abs(float(x) - 0.5), reverse=True)
+        elif rm == "negative":
+            ranked = sorted(seg_probs, key=lambda x: float(x))
+        else:
+            ranked = sorted(seg_probs, key=lambda x: float(x), reverse=True)
+        chosen = ranked[:top_k] if len(ranked) > top_k else ranked
+        pm = (doc_pool_mode or "").strip().lower()
+        if not chosen:
+            out.append(0.5)
+        elif pm == "max":
+            out.append(float(max(float(x) for x in chosen)))
+        else:
+            out.append(float(sum(float(x) for x in chosen) / float(len(chosen))))
     return out
 
 
-def main():
+def _normalize_binary_label(v: str):
+    s = "" if v is None else str(v).strip()
+    if s in {"积极", "正面", "正向"}:
+        return 1
+    if s in {"消极", "负面", "负向"}:
+        return 0
+    if "positive" in s.lower():
+        return 1
+    if "negative" in s.lower():
+        return 0
+    return None
+
+
+def _find_best_threshold(y_true, scores):
+    pairs = []
+    for yt, sc in zip(y_true, scores):
+        try:
+            yt_i = int(yt)
+        except Exception:
+            continue
+        if yt_i not in (0, 1):
+            continue
+        try:
+            sc_f = float(sc)
+        except Exception:
+            continue
+        if sc_f != sc_f:
+            continue
+        pairs.append((yt_i, max(0.0, min(1.0, sc_f))))
+    if not pairs:
+        return None
+
+    ys = [p[0] for p in pairs]
+    ss = [p[1] for p in pairs]
+    candidates = sorted(set(ss + [0.5]))
+    if len(candidates) > 400:
+        step = max(1, len(candidates) // 400)
+        candidates = candidates[::step]
+
+    best = None
+    for th in candidates:
+        tp = tn = fp = fn = 0
+        for y, s in zip(ys, ss):
+            pred = 1 if s >= th else 0
+            if y == 1 and pred == 1:
+                tp += 1
+            elif y == 0 and pred == 0:
+                tn += 1
+            elif y == 0 and pred == 1:
+                fp += 1
+            elif y == 1 and pred == 0:
+                fn += 1
+        total = tp + tn + fp + fn
+        acc = (tp + tn) / total if total else 0.0
+        p_pos = tp / (tp + fp) if (tp + fp) else 0.0
+        r_pos = tp / (tp + fn) if (tp + fn) else 0.0
+        f1_pos = 2 * p_pos * r_pos / (p_pos + r_pos) if (p_pos + r_pos) else 0.0
+        p_neg = tn / (tn + fn) if (tn + fn) else 0.0
+        r_neg = tn / (tn + fp) if (tn + fp) else 0.0
+        f1_neg = 2 * p_neg * r_neg / (p_neg + r_neg) if (p_neg + r_neg) else 0.0
+        macro_f1 = (f1_pos + f1_neg) / 2.0
+
+        cand = (macro_f1, acc, th)
+        if best is None:
+            best = cand
+            continue
+        if macro_f1 > best[0] + 1e-12:
+            best = cand
+            continue
+        if abs(macro_f1 - best[0]) <= 1e-12 and acc > best[1] + 1e-12:
+            best = cand
+            continue
+        if abs(macro_f1 - best[0]) <= 1e-12 and abs(acc - best[1]) <= 1e-12 and th > best[2]:
+            best = cand
+
+    if best is None:
+        return None
+    return float(best[2]), float(best[1]), float(best[0])
+
+
+def main(input_file: str | None = None, output_file: str | None = None, mode: str | None = None):
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
     model_dir = os.path.dirname(os.path.abspath(__file__))
@@ -296,27 +439,35 @@ def main():
     output_full = os.path.join(prediction_dir, "roBERTa_fit_prediction.csv")
     output_sample = os.path.join(estimate_dir, "roBERTa_fit_sample_prediction.csv")
 
-    if sys.stdin.isatty():
-        mode = choose_mode_interactively()
-    else:
-        mode = "sample"
-    if mode is None:
-        print("无效输入，程序结束。")
-        return
-
     print("正在读取清洗后的数据...")
-    if mode == "sample":
-        if not os.path.exists(input_sample):
-            print(f"输入文件不存在: {input_sample}")
+    if input_file or output_file:
+        input_file = input_file or input_full
+        output_file = output_file or output_full
+        if not os.path.exists(input_file):
+            print(f"输入文件不存在: {input_file}")
             return
-        df = load_csv(input_sample)
-        output_file = output_sample
+        df = load_csv(input_file)
     else:
-        if not os.path.exists(input_full):
-            print(f"输入文件不存在: {input_full}")
+        if mode is None:
+            if sys.stdin.isatty():
+                mode = choose_mode_interactively()
+            else:
+                mode = "sample"
+        if mode is None:
+            print("无效输入，程序结束。")
             return
-        df = load_csv(input_full)
-        output_file = output_full
+        if mode == "sample":
+            if not os.path.exists(input_sample):
+                print(f"输入文件不存在: {input_sample}")
+                return
+            df = load_csv(input_sample)
+            output_file = output_sample
+        else:
+            if not os.path.exists(input_full):
+                print(f"输入文件不存在: {input_full}")
+                return
+            df = load_csv(input_full)
+            output_file = output_full
     if df.empty:
         print("输入数据为空，结束。")
         return
@@ -328,10 +479,6 @@ def main():
 
     if "answer_id" in df.columns:
         df["answer_id"] = df["answer_id"].fillna("").astype(str).str.strip()
-
-    doc_topics_df = load_latest_doc_topics(model_dir)
-    if doc_topics_df is not None and "answer_id" in df.columns:
-        df = df.merge(doc_topics_df, on="answer_id", how="left")
 
     device = get_preferred_device()
     print(f"Device: {device}")
@@ -381,13 +528,17 @@ def main():
     pos_label_id = _detect_pos_label_id(model)
     batch_size = 64 if device.type != "cpu" else 16
     max_length = 512
-    try:
-        positive_threshold = float(os.environ.get("ROBERTA_POS_THRESHOLD", "0.5"))
-    except Exception:
-        positive_threshold = 0.5
-    positive_threshold = max(0.0, min(1.0, positive_threshold))
+    positive_threshold = None
+    override_th = os.environ.get("ROBERTA_POS_THRESHOLD")
+    if override_th is not None and str(override_th).strip() != "":
+        try:
+            positive_threshold = float(override_th)
+        except Exception:
+            positive_threshold = None
+    if positive_threshold is not None:
+        positive_threshold = max(0.0, min(1.0, float(positive_threshold)))
 
-    texts = df[text_col].fillna("").astype(str).tolist()
+    texts = _build_context_texts(df=df, text_col=text_col, dataset_dir=dataset_dir)
     print(f"待分析文本条数: {len(texts)}")
     probs_pos = _predict_pos_probs_longtexts(
         model=model,
@@ -399,34 +550,26 @@ def main():
         pos_label_id=pos_label_id,
     )
 
-    labels = []
-    scores = []
     raw_probs = []
     raw_labels = []
-    for i, text in enumerate(texts):
+    for i, _text in enumerate(texts):
         p_pos = float(probs_pos[i]) if i < len(probs_pos) else 0.5
         if p_pos != p_pos:
             p_pos = 0.5
         p_pos = max(0.0, min(1.0, p_pos))
         raw_probs.append(p_pos)
-        raw_labels.append("积极" if p_pos >= positive_threshold else "消极")
 
-        aspect = df.at[i, "aspect"] if "aspect" in df.columns else None
-        aspect_prob = df.at[i, "probability"] if "probability" in df.columns else None
-        lbl, score = combine_comment_with_aspect(
-            comment_score=p_pos,
-            aspect=aspect,
-            aspect_prob=aspect_prob,
-            text=text,
-        )
-        labels.append(lbl)
-        scores.append(score)
+    if positive_threshold is None:
+        positive_threshold = 0.5
+    positive_threshold = max(0.0, min(1.0, float(positive_threshold)))
+    for p_pos in raw_probs:
+        raw_labels.append("积极" if p_pos >= positive_threshold else "消极")
 
     out_df = df.copy()
     out_df["model_positive_prob"] = raw_probs
     out_df["model_sentiment_label"] = raw_labels
-    out_df["sentiment_label"] = labels
-    out_df["sentiment_score"] = scores
+    out_df["sentiment_label"] = raw_labels
+    out_df["sentiment_score"] = raw_probs
 
     for col in ["topic", "probability", "aspect", "topic_id", "topic_probability"]:
         if col in out_df.columns:

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import os
 import re
@@ -134,39 +136,58 @@ def _clean_answers(df, max_content_chars):
     return out
 
 
-def main():
+def main(
+    questions_in: str | None = None,
+    answers_in: str | None = None,
+    questions_out: str | None = None,
+    answers_out: str | None = None,
+    max_content_chars: int = 8000,
+):
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     dataset_dir = os.path.join(project_dir, "dataset")
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--questions_in", default=os.path.join(dataset_dir, "zhihu_questions.csv"))
-    parser.add_argument("--answers_in", default=os.path.join(dataset_dir, "zhihu_answers.csv"))
-    parser.add_argument("--questions_out", default=os.path.join(dataset_dir, "zhihu_questions_cleaned.csv"))
-    parser.add_argument("--answers_out", default=os.path.join(dataset_dir, "zhihu_answers_cleaned.csv"))
-    parser.add_argument("--max_content_chars", type=int, default=8000)
-    args = parser.parse_args()
 
-    if not os.path.exists(args.questions_in):
-        print(f"问题输入文件不存在: {args.questions_in}")
+    if questions_in is None and answers_in is None and questions_out is None and answers_out is None:
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--questions_in", default=os.path.join(dataset_dir, "zhihu_questions.csv"))
+        parser.add_argument("--answers_in", default=os.path.join(dataset_dir, "zhihu_answers.csv"))
+        parser.add_argument("--questions_out", default=os.path.join(dataset_dir, "zhihu_questions_cleaned.csv"))
+        parser.add_argument("--answers_out", default=os.path.join(dataset_dir, "zhihu_answers_cleaned.csv"))
+        parser.add_argument("--max_content_chars", type=int, default=8000)
+        args = parser.parse_args()
+        questions_in = args.questions_in
+        answers_in = args.answers_in
+        questions_out = args.questions_out
+        answers_out = args.answers_out
+        max_content_chars = int(args.max_content_chars)
+    else:
+        questions_in = questions_in or os.path.join(dataset_dir, "zhihu_questions.csv")
+        answers_in = answers_in or os.path.join(dataset_dir, "zhihu_answers.csv")
+        questions_out = questions_out or os.path.join(dataset_dir, "zhihu_questions_cleaned.csv")
+        answers_out = answers_out or os.path.join(dataset_dir, "zhihu_answers_cleaned.csv")
+        max_content_chars = int(max_content_chars)
+
+    if not os.path.exists(questions_in):
+        print(f"问题输入文件不存在: {questions_in}")
         return
-    if not os.path.exists(args.answers_in):
-        print(f"回答输入文件不存在: {args.answers_in}")
+    if not os.path.exists(answers_in):
+        print(f"回答输入文件不存在: {answers_in}")
         return
 
     t0 = datetime.now()
 
-    q_raw = _read_csv(args.questions_in)
-    a_raw = _read_csv(args.answers_in)
+    q_raw = _read_csv(questions_in)
+    a_raw = _read_csv(answers_in)
 
     q_clean = _clean_questions(q_raw)
-    a_clean = _clean_answers(a_raw, max_content_chars=args.max_content_chars)
+    a_clean = _clean_answers(a_raw, max_content_chars=max_content_chars)
 
-    _write_csv(q_clean, args.questions_out)
-    _write_csv(a_clean, args.answers_out)
+    _write_csv(q_clean, questions_out)
+    _write_csv(a_clean, answers_out)
 
     print(f"问题原始: {len(q_raw)} -> 清洗后: {len(q_clean)}")
     print(f"回答原始: {len(a_raw)} -> 清洗后: {len(a_clean)}")
-    print(f"问题输出: {args.questions_out}")
-    print(f"回答输出: {args.answers_out}")
+    print(f"问题输出: {questions_out}")
+    print(f"回答输出: {answers_out}")
     print(f"耗时: {(datetime.now() - t0).total_seconds():.1f}s")
 
 

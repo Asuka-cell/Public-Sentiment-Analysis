@@ -1,6 +1,17 @@
+from __future__ import annotations
+
 import os
 import re
 import pandas as pd
+
+
+def _read_csv_any(path: str) -> pd.DataFrame:
+    for enc in ("utf-8-sig", "utf-8", "gb18030", "gbk", "latin1"):
+        try:
+            return pd.read_csv(path, encoding=enc)
+        except Exception:
+            continue
+    return pd.read_csv(path)
 
 
 def clean_text(text):
@@ -18,14 +29,14 @@ def clean_text(text):
     return text
 
 
-def main():
+def main(input_file: str | None = None, output_file: str | None = None):
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    input_file = os.path.join(base_dir, "weibo_posts.csv")
-    output_file = os.path.join(base_dir, "weibo_posts_cleaned.csv")
+    input_file = input_file or os.path.join(base_dir, "weibo_posts.csv")
+    output_file = output_file or os.path.join(base_dir, "weibo_posts_cleaned.csv")
 
     print("正在读取数据...")
     try:
-        df = pd.read_csv(input_file, encoding="utf-8-sig")
+        df = _read_csv_any(input_file)
     except Exception as e:
         print(f"读取CSV失败: {e}")
         return

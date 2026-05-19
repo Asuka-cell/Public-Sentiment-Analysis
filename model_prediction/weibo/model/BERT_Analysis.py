@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 
 import pandas as pd
@@ -17,13 +19,13 @@ def map_label(label):
     return "未知"
 
 
-def main():
+def main(input_file: str | None = None, output_file: str | None = None):
     os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
-    input_file = os.path.join(base_dir, "weibo_comments_cleaned.csv")
-    output_file = os.path.join(base_dir, "BERT_prediction.csv")
+    input_file = input_file or os.path.join(base_dir, "weibo_comments_cleaned.csv")
+    output_file = output_file or os.path.join(base_dir, "BERT_prediction.csv")
 
     print("正在读取清洗后的数据...")
     try:

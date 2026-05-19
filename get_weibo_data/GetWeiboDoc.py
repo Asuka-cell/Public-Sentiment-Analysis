@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import io
 import json
 import os
 
@@ -12,23 +15,43 @@ def safe_str(value):
     return str(value)
 
 
-def main():
+def load_csv(path: str) -> pd.DataFrame:
+    try:
+        raw = b""
+        with open(path, "rb") as f:
+            raw = f.read()
+    except Exception:
+        raw = b""
+
+    for enc in ("utf-8-sig", "utf-8", "gb18030", "gbk"):
+        try:
+            text = raw.decode(enc)
+            return pd.read_csv(io.StringIO(text))
+        except Exception:
+            continue
+
+    try:
+        text = raw.decode("latin1", errors="ignore")
+        return pd.read_csv(io.StringIO(text))
+    except Exception:
+        return pd.DataFrame()
+
+
+def main(posts_path: str | None = None, comments_path: str | None = None, output_path: str | None = None):
     base_dir = os.path.dirname(os.path.abspath(__file__))
     project_dir = os.path.dirname(base_dir)
-    dataset_dir = os.path.join(project_dir, "dataset")
-    posts_path = os.path.join(dataset_dir, "weibo_posts_cleaned.csv")
-    comments_path = os.path.join(dataset_dir, "weibo_comments_cleaned.csv")
-    output_path = os.path.join(dataset_dir, "weibo_doc.jsonl")
+    posts_path = posts_path or os.path.join(project_dir, "dataset/weibo_posts_cleaned.csv")
+    comments_path = comments_path or os.path.join(project_dir, "dataset/weibo_comments_cleaned.csv")
+    output_path = output_path or os.path.join(project_dir, "dataset/weibo_doc.jsonl")
 
-    try:
-        posts_df = pd.read_csv(posts_path, encoding="utf-8-sig")
-    except Exception:
-        posts_df = pd.read_csv(posts_path)
-
-    try:
-        comments_df = pd.read_csv(comments_path, encoding="utf-8-sig")
-    except Exception:
-        comments_df = pd.read_csv(comments_path)
+    posts_df = load_csv(posts_path)
+    comments_df = load_csv(comments_path)
+    if posts_df.empty:
+        print(f"读取CSV失败或为空: {posts_path}")
+        return
+    if comments_df.empty:
+        print(f"读取CSV失败或为空: {comments_path}")
+        return
 
     if "weibo_id" not in posts_df.columns:
         print("weibo_posts_cleaned.csv 缺少 weibo_id 列")

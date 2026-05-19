@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -131,26 +133,59 @@ def write_jsonl(path, records):
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
-def main():
-    parser = argparse.ArgumentParser()
+def main(
+    input_path: str | None = None,
+    output_path: str | None = None,
+    max_comments: int | None = None,
+    min_comment_len: int | None = None,
+    max_doc_chars: int | None = None,
+    post_repeat: int | None = None,
+    min_cjk_or_alpha: int | None = None,
+):
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     dataset_dir = os.path.join(project_dir, "dataset")
-    parser.add_argument("--input", default=os.path.join(dataset_dir, "weibo_doc.jsonl"))
-    parser.add_argument("--output", default=os.path.join(dataset_dir, "weibo_doc_cleaned.jsonl"))
-    parser.add_argument("--max_comments", type=int, default=50)
-    parser.add_argument("--min_comment_len", type=int, default=4)
-    parser.add_argument("--max_doc_chars", type=int, default=4000)
-    parser.add_argument("--post_repeat", type=int, default=1)
-    parser.add_argument("--min_cjk_or_alpha", type=int, default=10)
-    args = parser.parse_args()
 
-    if not os.path.exists(args.input):
-        print(f"输入文件不存在: {args.input}")
+    if (
+        input_path is None
+        and output_path is None
+        and max_comments is None
+        and min_comment_len is None
+        and max_doc_chars is None
+        and post_repeat is None
+        and min_cjk_or_alpha is None
+    ):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--input", default=os.path.join(dataset_dir, "weibo_doc.jsonl"))
+        parser.add_argument("--output", default=os.path.join(dataset_dir, "weibo_doc_cleaned.jsonl"))
+        parser.add_argument("--max_comments", type=int, default=50)
+        parser.add_argument("--min_comment_len", type=int, default=4)
+        parser.add_argument("--max_doc_chars", type=int, default=4000)
+        parser.add_argument("--post_repeat", type=int, default=1)
+        parser.add_argument("--min_cjk_or_alpha", type=int, default=10)
+        args = parser.parse_args()
+        input_path = args.input
+        output_path = args.output
+        max_comments = args.max_comments
+        min_comment_len = args.min_comment_len
+        max_doc_chars = args.max_doc_chars
+        post_repeat = args.post_repeat
+        min_cjk_or_alpha = args.min_cjk_or_alpha
+    else:
+        input_path = input_path or os.path.join(dataset_dir, "weibo_doc.jsonl")
+        output_path = output_path or os.path.join(dataset_dir, "weibo_doc_cleaned.jsonl")
+        max_comments = 50 if max_comments is None else int(max_comments)
+        min_comment_len = 4 if min_comment_len is None else int(min_comment_len)
+        max_doc_chars = 4000 if max_doc_chars is None else int(max_doc_chars)
+        post_repeat = 1 if post_repeat is None else int(post_repeat)
+        min_cjk_or_alpha = 10 if min_cjk_or_alpha is None else int(min_cjk_or_alpha)
+
+    if not os.path.exists(input_path):
+        print(f"输入文件不存在: {input_path}")
         return
 
-    records = read_jsonl(args.input)
+    records = read_jsonl(input_path)
     if not records:
-        print(f"输入为空或无法解析: {args.input}")
+        print(f"输入为空或无法解析: {input_path}")
         return
 
     cleaned_records = []
@@ -166,17 +201,17 @@ def main():
         post_text, comment_texts, doc_text = build_document(
             post=post,
             comments=comments,
-            max_comments=args.max_comments,
-            min_comment_len=args.min_comment_len,
-            max_doc_chars=args.max_doc_chars,
-            post_repeat=args.post_repeat,
+            max_comments=max_comments,
+            min_comment_len=min_comment_len,
+            max_doc_chars=max_doc_chars,
+            post_repeat=post_repeat,
         )
 
         if not doc_text:
             dropped += 1
             continue
 
-        if (count_cjk(doc_text) + count_alpha(doc_text)) < int(args.min_cjk_or_alpha):
+        if (count_cjk(doc_text) + count_alpha(doc_text)) < int(min_cjk_or_alpha):
             dropped += 1
             continue
 
@@ -193,12 +228,12 @@ def main():
             }
         )
 
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
-    write_jsonl(args.output, cleaned_records)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    write_jsonl(output_path, cleaned_records)
     print(f"输入条数: {len(records)}")
     print(f"输出条数: {len(cleaned_records)}")
     print(f"丢弃条数: {dropped}")
-    print(f"输出路径: {args.output}")
+    print(f"输出路径: {output_path}")
 
 
 if __name__ == "__main__":
